@@ -329,7 +329,9 @@ class ApiTests(unittest.TestCase):
         root = ET.fromstring(payload)
         self.assertEqual(root.tag, "Templates")
         self.assertIn(b"PacketParserThermostat", payload)
-        self.assertIn(b"/api/taphome/ac/$[ClimateName]", payload)
+        self.assertIn(b'"/api/taphome/ac/" + ClimateName', payload)
+        self.assertIn(b'"StringValue":"$[ClimateName]"', payload)
+        self.assertNotIn(b'/api/taphome/ac/$[ClimateName]', payload)
         self.assertIn(b"<Id>ClimateName</Id>", payload)
 
 
