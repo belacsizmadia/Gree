@@ -45,6 +45,9 @@ const elements = {
   climateFan: $("#climateFan"),
   climateFlags: $("#climateFlags"),
   climateRaw: $("#climateRaw"),
+  tapHomeDot: $("#tapHomeDot"),
+  tapHomeStatus: $("#tapHomeStatus"),
+  tapHomeEndpoint: $("#tapHomeEndpoint"),
 };
 
 const state = {
@@ -136,6 +139,23 @@ async function loadClimateOverview() {
     if (!overview.available) setClimateNote("A Gree Wi-Fi kliens nincs telepítve a szerveren.", true);
   } catch (error) {
     setClimateNote(error.message, true);
+  }
+}
+
+async function loadTapHomeStatus() {
+  try {
+    const gateway = await api("/api/taphome/status");
+    elements.tapHomeDot.classList.toggle("online", gateway.running && gateway.connected);
+    elements.tapHomeDot.classList.toggle("error", Boolean(gateway.error));
+    elements.tapHomeEndpoint.textContent = `MODBUS TCP ${gateway.host}:${gateway.port} · ID ${gateway.slaveId}`;
+    if (!gateway.enabled) elements.tapHomeStatus.textContent = "Kikapcsolva — GREE_TAPHOME_ENABLED=1 szükséges";
+    else if (gateway.error) elements.tapHomeStatus.textContent = gateway.error;
+    else if (gateway.connected) elements.tapHomeStatus.textContent = `Klíma szinkronizálva · ${gateway.lastSyncAt ? new Date(gateway.lastSyncAt).toLocaleTimeString("hu-HU", { hour12: false }) : "—"}`;
+    else if (gateway.running) elements.tapHomeStatus.textContent = "Modbus szerver fut, klímaválaszra vár";
+    else elements.tapHomeStatus.textContent = "Gateway indításra vár";
+  } catch (error) {
+    elements.tapHomeDot.classList.add("error");
+    elements.tapHomeStatus.textContent = error.message;
   }
 }
 
@@ -582,10 +602,12 @@ setInterval(updateRate, 1000);
 setInterval(() => {
   if (elements.lastSeen.dataset.time) updateLastSeen(elements.lastSeen.dataset.time);
 }, 1000);
+setInterval(loadTapHomeStatus, 5000);
 
 Promise.all([
   loadPorts(),
   loadClimateOverview(),
+  loadTapHomeStatus(),
   api("/api/status").then(applyStatus).catch((error) => setFormError(error.message)),
 ]);
 connectEventStream();

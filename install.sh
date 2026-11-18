@@ -6,7 +6,9 @@ APP_NAME="gree-usb-monitor"
 INSTALL_DIR="/opt/${APP_NAME}"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 DEFAULT_HTTP_PORT="8090"
+DEFAULT_TAPHOME_PORT="502"
 HTTP_PORT=""
+TAPHOME_PORT="${DEFAULT_TAPHOME_PORT}"
 INSTALL_USER=""
 PORT_FROM_ARGUMENT=0
 
@@ -14,16 +16,18 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
-Gree USB Monitor telepítő Raspberry Pi-re
+Gree Local Monitor telepítő Raspberry Pi-re
 
 Használat:
   sudo ./install.sh
   sudo ./install.sh --port 8090
+  sudo ./install.sh --port 8090 --taphome-port 502
 
 Kapcsolók:
-  --port PORT     A webes felület HTTP-portja (1024-65535).
-  --user USER     A szolgáltatást futtató Linux-felhasználó.
-  -h, --help      Súgó megjelenítése.
+  --port PORT          A webes felület HTTP-portja (1024-65535).
+  --taphome-port PORT  A TapHome Modbus TCP portja (alapérték: 502).
+  --user USER          A szolgáltatást futtató Linux-felhasználó.
+  -h, --help           Súgó megjelenítése.
 
 Port megadása nélkül a telepítő interaktívan rákérdez. Az alapérték 8090.
 USAGE
@@ -40,6 +44,11 @@ while (($#)); do
       [[ $# -ge 2 ]] || fail "A --port után adj meg egy portszámot."
       HTTP_PORT="$2"
       PORT_FROM_ARGUMENT=1
+      shift 2
+      ;;
+    --taphome-port)
+      [[ $# -ge 2 ]] || fail "A --taphome-port után adj meg egy portszámot."
+      TAPHOME_PORT="$2"
       shift 2
       ;;
     --user)
@@ -60,7 +69,7 @@ done
 [[ ${EUID} -eq 0 ]] || fail "A telepítőt root jogosultsággal futtasd: sudo ./install.sh"
 command -v python3 >/dev/null || fail "A python3 nem található. Telepítsd a python3 és python3-venv csomagokat."
 command -v systemctl >/dev/null || fail "A systemd nem érhető el ezen a rendszeren."
-[[ -f "${SOURCE_DIR}/server.py" && -d "${SOURCE_DIR}/static" ]] || fail "A telepítőt a Gree repó gyökeréből futtasd."
+[[ -f "${SOURCE_DIR}/server.py" && -f "${SOURCE_DIR}/taphome_gateway.py" && -d "${SOURCE_DIR}/static" ]] || fail "A telepítőt a Gree repó gyökeréből futtasd."
 python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' || fail "Python 3.10 vagy újabb szükséges."
 
 if [[ -z "${INSTALL_USER}" ]]; then
@@ -82,6 +91,10 @@ valid_port() {
   [[ "$1" =~ ^[0-9]+$ ]] && ((10#$1 >= 1024 && 10#$1 <= 65535))
 }
 
+valid_taphome_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535))
+}
+
 port_in_use() {
   command -v ss >/dev/null || return 1
   ss -H -ltn "sport = :$1" 2>/dev/null | grep -q .
@@ -90,7 +103,7 @@ port_in_use() {
 port_owned_by_existing_service() {
   [[ -f "${INSTALL_DIR}/.env" ]] || return 1
   systemctl is-active --quiet "${APP_NAME}.service" || return 1
-  grep -qx "GREE_PORT=$1" "${INSTALL_DIR}/.env"
+  grep -qx "$2=$1" "${INSTALL_DIR}/.env"
 }
 
 while true; do
@@ -112,7 +125,7 @@ while true; do
     continue
   fi
 
-  if port_in_use "${HTTP_PORT}" && ! port_owned_by_existing_service "${HTTP_PORT}"; then
+  if port_in_use "${HTTP_PORT}" && ! port_owned_by_existing_service "${HTTP_PORT}" GREE_PORT; then
     if ((PORT_FROM_ARGUMENT)); then
       fail "A(z) ${HTTP_PORT} port már foglalt. Válassz másikat a --port kapcsolóval."
     fi
@@ -123,13 +136,21 @@ while true; do
   break
 done
 
-printf '\nGree USB Monitor telepítése\n'
+valid_taphome_port "${TAPHOME_PORT}" || fail "Érvénytelen TapHome-port: ${TAPHOME_PORT}."
+[[ "${HTTP_PORT}" != "${TAPHOME_PORT}" ]] || fail "A webes és a TapHome-port nem lehet azonos."
+if port_in_use "${TAPHOME_PORT}" && ! port_owned_by_existing_service "${TAPHOME_PORT}" GREE_TAPHOME_PORT; then
+  fail "A TapHome Modbus TCP port (${TAPHOME_PORT}) már foglalt. Add meg másként a --taphome-port kapcsolóval."
+fi
+
+printf '\nGree Local Monitor telepítése\n'
 printf '  Könyvtár:   %s\n' "${INSTALL_DIR}"
 printf '  Felhasználó: %s\n' "${INSTALL_USER}"
-printf '  HTTP-port:   %s\n\n' "${HTTP_PORT}"
+printf '  HTTP-port:   %s\n' "${HTTP_PORT}"
+printf '  TapHome-port: %s (Modbus TCP)\n\n' "${TAPHOME_PORT}"
 
 install -d -m 0755 "${INSTALL_DIR}" "${INSTALL_DIR}/static" "${INSTALL_DIR}/deploy"
 install -m 0755 "${SOURCE_DIR}/server.py" "${INSTALL_DIR}/server.py"
+install -m 0644 "${SOURCE_DIR}/taphome_gateway.py" "${INSTALL_DIR}/taphome_gateway.py"
 install -m 0644 "${SOURCE_DIR}/requirements.txt" "${INSTALL_DIR}/requirements.txt"
 install -m 0644 "${SOURCE_DIR}/README.md" "${INSTALL_DIR}/README.md"
 cp -a "${SOURCE_DIR}/static/." "${INSTALL_DIR}/static/"
@@ -149,14 +170,29 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -f "${INSTALL_DIR}/.env" ]]; then
-  sed "s/^GREE_PORT=.*/GREE_PORT=${HTTP_PORT}/" "${INSTALL_DIR}/.env" >"${ENV_TMP}"
+  sed \
+    -e "s/^GREE_PORT=.*/GREE_PORT=${HTTP_PORT}/" \
+    -e 's/^GREE_TAPHOME_ENABLED=.*/GREE_TAPHOME_ENABLED=1/' \
+    -e "s/^GREE_TAPHOME_PORT=.*/GREE_TAPHOME_PORT=${TAPHOME_PORT}/" \
+    "${INSTALL_DIR}/.env" >"${ENV_TMP}"
   grep -q '^GREE_PORT=' "${INSTALL_DIR}/.env" || printf 'GREE_PORT=%s\n' "${HTTP_PORT}" >>"${ENV_TMP}"
   grep -q '^GREE_HOST=' "${INSTALL_DIR}/.env" || printf 'GREE_HOST=0.0.0.0\n' >>"${ENV_TMP}"
+  grep -q '^GREE_TAPHOME_ENABLED=' "${INSTALL_DIR}/.env" || printf 'GREE_TAPHOME_ENABLED=1\n' >>"${ENV_TMP}"
+  grep -q '^GREE_TAPHOME_HOST=' "${INSTALL_DIR}/.env" || printf 'GREE_TAPHOME_HOST=0.0.0.0\n' >>"${ENV_TMP}"
+  grep -q '^GREE_TAPHOME_PORT=' "${INSTALL_DIR}/.env" || printf 'GREE_TAPHOME_PORT=%s\n' "${TAPHOME_PORT}" >>"${ENV_TMP}"
+  grep -q '^GREE_TAPHOME_SLAVE_ID=' "${INSTALL_DIR}/.env" || printf 'GREE_TAPHOME_SLAVE_ID=1\n' >>"${ENV_TMP}"
+  grep -q '^GREE_TAPHOME_POLL_INTERVAL=' "${INSTALL_DIR}/.env" || printf 'GREE_TAPHOME_POLL_INTERVAL=5\n' >>"${ENV_TMP}"
 else
   printf '%s\n' \
     '# A telepítő által generált beállítások.' \
     'GREE_HOST=0.0.0.0' \
     "GREE_PORT=${HTTP_PORT}" \
+    'GREE_TAPHOME_ENABLED=1' \
+    'GREE_TAPHOME_HOST=0.0.0.0' \
+    "GREE_TAPHOME_PORT=${TAPHOME_PORT}" \
+    'GREE_TAPHOME_SLAVE_ID=1' \
+    'GREE_TAPHOME_POLL_INTERVAL=5' \
+    '# GREE_TAPHOME_DEVICE=AABBCC112233' \
     '# GREE_SERIAL_PORT=/dev/ttyUSB0' \
     '# GREE_BAUDRATE=115200' \
     '# GREE_AC_HOST=192.168.1.73' \
@@ -190,5 +226,6 @@ DEVICE_IP="${DEVICE_IP:-raspberry-pi-ip}"
 
 printf '\nTelepítés kész.\n'
 printf 'Webes felület: http://%s:%s\n' "${DEVICE_IP}" "${HTTP_PORT}"
+printf 'TapHome Gree_AC: %s:%s, Slave ID 1\n' "${DEVICE_IP}" "${TAPHOME_PORT}"
 printf 'Állapot: sudo systemctl status %s\n' "${APP_NAME}"
 printf 'Napló:   sudo journalctl -u %s -f\n' "${APP_NAME}"

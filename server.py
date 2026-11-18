@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from taphome_gateway import TapHomeGateway
+
 try:
     import serial  # type: ignore[import-not-found]
     from serial.tools import list_ports  # type: ignore[import-not-found]
@@ -371,6 +373,25 @@ class ClimateGateway:
                 raise
             return result
 
+    def control(self, changes: dict[str, Any], identifier: str | None = None) -> dict[str, Any]:
+        """Apply validated climate changes and return the resulting local state."""
+        self._ensure_available()
+        if not changes:
+            raise ValueError("Nincs alkalmazható klímabeállítás.")
+        with self._lock:
+            info = self._select_device(identifier)
+            try:
+                return asyncio.run(self._control_device(info, changes))
+            except (OSError, asyncio.TimeoutError) as error:
+                raise ClimateGatewayError(f"A klíma vezérlése sikertelen: {error}") from error
+            except Exception as error:
+                timeout_types = tuple(
+                    item for item in (DeviceTimeoutError, DeviceNotBoundError) if isinstance(item, type)
+                )
+                if timeout_types and isinstance(error, timeout_types):
+                    raise ClimateGatewayError("A klíma nem igazolta vissza a beállítást.") from error
+                raise
+
     def _ensure_available(self) -> None:
         if not self.available:
             raise ClimateGatewayUnavailable(
@@ -441,7 +462,7 @@ class ClimateGateway:
         finally:
             discovery.close()
 
-    async def _query_device(self, cached: dict[str, Any]) -> dict[str, Any]:
+    async def _connect_device(self, cached: dict[str, Any]) -> tuple[Any, Any]:
         # Some modules require a fresh unicast discovery immediately before binding.
         refreshed = await self._discover(cached["ip"], 1)
         matching = next(
@@ -474,9 +495,69 @@ class ClimateGateway:
                     await asyncio.sleep(0.05)
             if not device.has_valid_state:
                 raise asyncio.TimeoutError("az állapotlekérés időtúllépés miatt megszakadt")
+        except Exception:
+            device.close()
+            raise
+        return device, info
+
+    async def _query_device(self, cached: dict[str, Any]) -> dict[str, Any]:
+        device, info = await self._connect_device(cached)
+        try:
             return self._serialize_state(device, info)
         finally:
             device.close()
+
+    async def _control_device(self, cached: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
+        device, info = await self._connect_device(cached)
+        try:
+            validators: dict[str, tuple[str, Any]] = {
+                "power": ("power", lambda value: bool(value)),
+                "mode": ("mode", lambda value: self._bounded_int(value, 0, 4, "üzemmód")),
+                "targetTemperature": (
+                    "target_temperature",
+                    lambda value: self._bounded_int(value, 16, 30, "célhőmérséklet"),
+                ),
+                "fanSpeed": ("fan_speed", lambda value: self._bounded_int(value, 0, 5, "ventilátor")),
+                "horizontalSwing": (
+                    "horizontal_swing",
+                    lambda value: self._bounded_int(value, 0, 6, "vízszintes légterelő"),
+                ),
+                "verticalSwing": (
+                    "vertical_swing",
+                    lambda value: self._bounded_int(value, 0, 11, "függőleges légterelő"),
+                ),
+                "quiet": ("quiet", lambda value: bool(value)),
+                "turbo": ("turbo", lambda value: bool(value)),
+                "sleep": ("sleep", lambda value: bool(value)),
+                "light": ("light", lambda value: bool(value)),
+                "xfan": ("xfan", lambda value: bool(value)),
+                "anion": ("anion", lambda value: bool(value)),
+            }
+            unknown = sorted(set(changes) - set(validators))
+            if unknown:
+                raise ValueError(f"Nem támogatott klímabeállítás: {', '.join(unknown)}")
+            for name, value in changes.items():
+                attribute, validator = validators[name]
+                validated = validator(value)
+                if name == "targetTemperature" and device.temperature_units == 1:
+                    validated = round((validated * 9 / 5) + 32)
+                setattr(device, attribute, validated)
+            await device.push_state_update()
+            return self._serialize_state(device, info)
+        finally:
+            device.close()
+
+    @staticmethod
+    def _bounded_int(value: Any, minimum: int, maximum: int, label: str) -> int:
+        if isinstance(value, bool):
+            raise ValueError(f"Érvénytelen {label} érték.")
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Érvénytelen {label} érték.") from error
+        if number < minimum or number > maximum:
+            raise ValueError(f"A(z) {label} engedélyezett tartománya: {minimum}–{maximum}.")
+        return number
 
     @staticmethod
     def _enum_name(enum_type: Any, value: Any) -> str | None:
@@ -508,6 +589,7 @@ class ClimateGateway:
                     "value": device.vertical_swing,
                     "name": self._enum_name(VerticalSwing, device.vertical_swing),
                 },
+                "freshAir": device.fresh_air,
                 "quiet": device.quiet,
                 "turbo": device.turbo,
                 "sleep": device.sleep,
@@ -532,10 +614,12 @@ class AppServer(ThreadingHTTPServer):
         handler: type[BaseHTTPRequestHandler],
         monitor: SerialMonitor,
         climate: ClimateGateway | None = None,
+        taphome: TapHomeGateway | None = None,
     ):
         super().__init__(address, handler)
         self.monitor = monitor
         self.climate = climate or ClimateGateway()
+        self.taphome = taphome or TapHomeGateway(self.climate)
 
     def handle_error(self, request: Any, client_address: tuple[str, int]) -> None:
         """Browser reloads commonly reset an SSE socket; that is not a server error."""
@@ -557,6 +641,10 @@ class AppHandler(BaseHTTPRequestHandler):
     def climate(self) -> ClimateGateway:
         return self.server.climate  # type: ignore[attr-defined,no-any-return]
 
+    @property
+    def taphome(self) -> TapHomeGateway:
+        return self.server.taphome  # type: ignore[attr-defined,no-any-return]
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -566,6 +654,8 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json({"ports": [port.as_dict() for port in self.monitor.available_ports()]})
         elif path == "/api/ac/devices":
             self._send_json(self.climate.overview())
+        elif path in ("/api/taphome/status", "/api/taphome/gree-ac"):
+            self._send_json(self.taphome.status())
         elif path == "/api/ac/status":
             try:
                 query = parse_qs(parsed.query)
@@ -601,6 +691,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 body = self._read_json(optional=True)
                 target = str(body.get("target", "")).strip() or None
                 self._send_json(self.climate.scan(target))
+            elif path == "/api/taphome/sync":
+                self._read_json(optional=True)
+                self._send_json(self.taphome.sync_now())
+            elif path == "/api/taphome/gree-ac":
+                body = self._read_json()
+                if "register" not in body or "value" not in body:
+                    raise ValueError("A register és value mező megadása kötelező.")
+                self._send_json(self.taphome.apply_register_write(int(body["register"]), int(body["value"])))
             else:
                 self._send_json({"error": "Ismeretlen végpont."}, HTTPStatus.NOT_FOUND)
         except ClimateGatewayUnavailable as error:
@@ -699,6 +797,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baudrate", type=int, default=int(os.environ.get("GREE_BAUDRATE", "115200")))
     parser.add_argument("--demo", action="store_true", default=os.environ.get("GREE_DEMO") == "1")
     parser.add_argument("--ac-host", default=os.environ.get("GREE_AC_HOST"))
+    parser.add_argument("--taphome", action="store_true", default=os.environ.get("GREE_TAPHOME_ENABLED") == "1")
+    parser.add_argument("--taphome-host", default=os.environ.get("GREE_TAPHOME_HOST", "0.0.0.0"))
+    parser.add_argument("--taphome-port", type=int, default=int(os.environ.get("GREE_TAPHOME_PORT", "502")))
+    parser.add_argument(
+        "--taphome-slave-id", type=int, default=int(os.environ.get("GREE_TAPHOME_SLAVE_ID", "1"))
+    )
+    parser.add_argument("--taphome-device", default=os.environ.get("GREE_TAPHOME_DEVICE"))
+    parser.add_argument(
+        "--taphome-poll", type=float, default=float(os.environ.get("GREE_TAPHOME_POLL_INTERVAL", "5"))
+    )
     return parser.parse_args()
 
 
@@ -706,7 +814,16 @@ def main() -> None:
     args = parse_args()
     monitor = SerialMonitor()
     climate = ClimateGateway(default_target=args.ac_host)
-    httpd = AppServer((args.host, args.port), AppHandler, monitor, climate)
+    taphome = TapHomeGateway(
+        climate,
+        enabled=args.taphome,
+        host=args.taphome_host,
+        port=args.taphome_port,
+        slave_id=args.taphome_slave_id,
+        device_identifier=args.taphome_device,
+        poll_interval=args.taphome_poll,
+    )
+    httpd = AppServer((args.host, args.port), AppHandler, monitor, climate, taphome)
 
     if args.demo:
         monitor.start_demo()
@@ -715,6 +832,8 @@ def main() -> None:
             monitor.connect(args.serial_port, args.baudrate)
         except (ValueError, RuntimeError) as error:
             print(f"Automatikus csatlakozás sikertelen: {error}")
+
+    taphome.start()
 
     stop_once = threading.Event()
 
@@ -730,6 +849,7 @@ def main() -> None:
     try:
         httpd.serve_forever(poll_interval=0.25)
     finally:
+        taphome.stop()
         monitor.disconnect()
         httpd.server_close()
 
