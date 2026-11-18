@@ -96,9 +96,31 @@
         </header>
         <div class="climate-layout">
           <form class="climate-controls" id="climateForm">
-            <label for="climateTarget">Klíma IPv4-címe <span>opcionális</span></label>
-            <input id="climateTarget" type="text" inputmode="decimal" placeholder="pl. 192.168.1.73" autocomplete="off" />
-            <p class="field-help">Üresen hagyva az alkalmazás a teljes helyi hálózaton keres.</p>
+            <label for="climateProfile">Mentett klímaprofil</label>
+            <div class="select-wrap">
+              <select id="climateProfile">
+                <option value="">Nincs mentett profil</option>
+              </select>
+            </div>
+
+            <div class="profile-fields">
+              <div>
+                <label for="climateProfileName">Profilnév</label>
+                <input id="climateProfileName" type="text" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,31}" placeholder="pl. Nappali" autocomplete="off" />
+              </div>
+              <div>
+                <label for="climateTarget">Klíma IPv4-címe</label>
+                <input id="climateTarget" type="text" inputmode="decimal" placeholder="pl. 192.168.1.73" autocomplete="off" />
+              </div>
+            </div>
+            <div class="profile-actions">
+              <button class="secondary-button" id="climateProfileSave" type="button">Profil mentése</button>
+              <button class="small-button profile-delete" id="climateProfileDelete" type="button" disabled>Profil törlése</button>
+            </div>
+            <p class="field-help" id="climateProfileHelp">A profilnév lesz az API és a TapHome sablon klímaazonosítója.</p>
+
+            <div class="form-divider" aria-hidden="true"></div>
+            <p class="field-help">A fenti IP-címmel célzottan keres; üresen hagyva a teljes helyi hálózaton.</p>
 
             <button class="secondary-button climate-scan" id="climateScan" type="button">
               <span>Klíma felderítése</span><span aria-hidden="true">⌖</span>

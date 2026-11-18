@@ -60,7 +60,7 @@ done
 [[ ${EUID} -eq 0 ]] || fail "A telepítőt root jogosultsággal futtasd: sudo ./install.sh"
 command -v python3 >/dev/null || fail "A python3 nem található. Telepítsd a python3 és python3-venv csomagokat."
 command -v systemctl >/dev/null || fail "A systemd nem érhető el ezen a rendszeren."
-[[ -f "${SOURCE_DIR}/server.py" && -f "${SOURCE_DIR}/taphome_gateway.py" && -d "${SOURCE_DIR}/static" ]] || fail "A telepítőt a Gree repó gyökeréből futtasd."
+[[ -f "${SOURCE_DIR}/server.py" && -f "${SOURCE_DIR}/taphome_gateway.py" && -f "${SOURCE_DIR}/climate_profiles.py" && -d "${SOURCE_DIR}/static" ]] || fail "A telepítőt a Gree repó gyökeréből futtasd."
 python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' || fail "Python 3.10 vagy újabb szükséges."
 
 if [[ -z "${INSTALL_USER}" ]]; then
@@ -132,6 +132,7 @@ printf '  TapHome API:  http://eszköz:%s/api/taphome/ac\n\n' "${HTTP_PORT}"
 install -d -m 0755 "${INSTALL_DIR}" "${INSTALL_DIR}/static" "${INSTALL_DIR}/deploy"
 install -m 0755 "${SOURCE_DIR}/server.py" "${INSTALL_DIR}/server.py"
 install -m 0644 "${SOURCE_DIR}/taphome_gateway.py" "${INSTALL_DIR}/taphome_gateway.py"
+install -m 0644 "${SOURCE_DIR}/climate_profiles.py" "${INSTALL_DIR}/climate_profiles.py"
 install -m 0644 "${SOURCE_DIR}/requirements.txt" "${INSTALL_DIR}/requirements.txt"
 install -m 0644 "${SOURCE_DIR}/README.md" "${INSTALL_DIR}/README.md"
 cp -a "${SOURCE_DIR}/static/." "${INSTALL_DIR}/static/"
@@ -162,12 +163,14 @@ if [[ -f "${INSTALL_DIR}/.env" ]]; then
     "${INSTALL_DIR}/.env" >"${ENV_TMP}"
   grep -q '^GREE_PORT=' "${INSTALL_DIR}/.env" || printf 'GREE_PORT=%s\n' "${HTTP_PORT}" >>"${ENV_TMP}"
   grep -q '^GREE_HOST=' "${INSTALL_DIR}/.env" || printf 'GREE_HOST=0.0.0.0\n' >>"${ENV_TMP}"
+  grep -q '^GREE_CONFIG_PATH=' "${INSTALL_DIR}/.env" || printf 'GREE_CONFIG_PATH=/var/lib/gree-usb-monitor/climates.json\n' >>"${ENV_TMP}"
   grep -q '^GREE_TAPHOME_CACHE_SECONDS=' "${INSTALL_DIR}/.env" || printf 'GREE_TAPHOME_CACHE_SECONDS=1\n' >>"${ENV_TMP}"
 else
   printf '%s\n' \
     '# A telepítő által generált beállítások.' \
     'GREE_HOST=0.0.0.0' \
     "GREE_PORT=${HTTP_PORT}" \
+    'GREE_CONFIG_PATH=/var/lib/gree-usb-monitor/climates.json' \
     'GREE_TAPHOME_CACHE_SECONDS=1' \
     '# GREE_TAPHOME_DEVICE=AABBCC112233' \
     '# GREE_SERIAL_PORT=/dev/ttyUSB0' \

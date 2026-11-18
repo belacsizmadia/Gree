@@ -85,16 +85,18 @@ class TapHomeGateway:
         self,
         climate: Any,
         *,
+        profiles: Any | None = None,
         device_identifier: str | None = None,
         cache_seconds: float = 1.0,
     ) -> None:
         self.climate = climate
+        self.profiles = profiles
         self.device_identifier = device_identifier.strip() if device_identifier else None
         self.cache_seconds = max(0.0, min(float(cache_seconds), 30.0))
         self._lock = threading.RLock()
         self._request_lock = threading.Lock()
-        self._cached_state: dict[str, Any] | None = None
-        self._cached_at = 0.0
+        self._cached_states: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._last_state: dict[str, Any] | None = None
         self._last_read_at: str | None = None
         self._last_write_at: str | None = None
         self._last_error: str | None = None
@@ -106,7 +108,8 @@ class TapHomeGateway:
     def status(self) -> dict[str, Any]:
         """Return gateway diagnostics without starting a climate-network request."""
         with self._lock:
-            cached = dict(self._cached_state) if self._cached_state else None
+            cached = dict(self._last_state) if self._last_state else None
+            profiles = self.profiles.list() if self.profiles is not None else []
             return {
                 "template": "Gree AC - HTTP Packet Parser",
                 "templateRevision": "1.0",
@@ -115,7 +118,7 @@ class TapHomeGateway:
                 "available": self.available,
                 "running": True,
                 "connected": cached is not None and self._last_error is None,
-                "endpoint": "/api/taphome/ac",
+                "endpoint": "/api/taphome/ac/{name}",
                 "templateEndpoint": "/api/taphome/template.xml",
                 "deviceIdentifier": self.device_identifier,
                 "cacheSeconds": self.cache_seconds,
@@ -123,94 +126,110 @@ class TapHomeGateway:
                 "lastWriteAt": self._last_write_at,
                 "error": self._last_error,
                 "state": cached,
+                "profiles": profiles,
                 "readableFields": list(READABLE_FIELDS),
                 "writableFields": list(WRITABLE_FIELDS),
             }
 
-    def read(self, *, force: bool = False) -> dict[str, Any]:
+    def read(self, name: str | None = None, *, force: bool = False) -> dict[str, Any]:
         """Read the selected climate and return flat semantic values."""
+        identifier, profile_name, cache_key = self._resolve_device(name)
         with self._lock:
-            if (
-                not force
-                and self._cached_state is not None
-                and time.monotonic() - self._cached_at <= self.cache_seconds
-            ):
-                return dict(self._cached_state)
+            cached = self._cached_states.get(cache_key)
+            if not force and cached and time.monotonic() - cached[0] <= self.cache_seconds:
+                return dict(cached[1])
 
         with self._request_lock:
             with self._lock:
-                if (
-                    not force
-                    and self._cached_state is not None
-                    and time.monotonic() - self._cached_at <= self.cache_seconds
-                ):
-                    return dict(self._cached_state)
+                cached = self._cached_states.get(cache_key)
+                if not force and cached and time.monotonic() - cached[0] <= self.cache_seconds:
+                    return dict(cached[1])
             try:
-                result = self._query_climate()
-                payload = self._semantic_state(result)
+                result = self._query_climate(identifier)
+                payload = self._semantic_state(result, profile_name)
             except Exception as error:
                 with self._lock:
                     self._last_error = str(error)
                 raise
             with self._lock:
-                self._cached_state = payload
-                self._cached_at = time.monotonic()
+                self._cached_states[cache_key] = (time.monotonic(), payload)
+                self._last_state = payload
                 self._last_read_at = utc_now()
                 self._last_error = None
                 return dict(payload)
 
-    def control(self, changes: dict[str, Any]) -> dict[str, Any]:
+    def control(self, changes: dict[str, Any], name: str | None = None) -> dict[str, Any]:
         """Apply semantic values and return the resulting semantic state."""
         normalized = self._normalize_changes(changes)
+        identifier, profile_name, cache_key = self._resolve_device(name)
         with self._request_lock:
             try:
-                result = self._control_climate(normalized)
-                payload = self._semantic_state(result)
+                result = self._control_climate(normalized, identifier)
+                payload = self._semantic_state(result, profile_name)
             except Exception as error:
                 with self._lock:
                     self._last_error = str(error)
                 raise
             with self._lock:
-                self._cached_state = payload
-                self._cached_at = time.monotonic()
+                self._cached_states[cache_key] = (time.monotonic(), payload)
+                self._last_state = payload
                 self._last_read_at = utc_now()
                 self._last_write_at = self._last_read_at
                 self._last_error = None
                 return dict(payload)
 
-    def sync_now(self) -> dict[str, Any]:
+    def sync_now(self, name: str | None = None) -> dict[str, Any]:
         """Explicitly refresh the Packet Parser state."""
-        return self.read(force=True)
+        return self.read(name, force=True)
 
-    def _query_climate(self) -> dict[str, Any]:
+    def _resolve_device(self, name: str | None) -> tuple[str | None, str | None, str]:
+        if name:
+            if self.profiles is None:
+                raise ValueError("A név szerinti klímaprofilok nincsenek beállítva.")
+            profile = self.profiles.resolve(name)
+            return profile["ip"], profile["name"], f"profile:{profile['name'].lower()}:{profile['ip']}"
+
+        if self.profiles is not None:
+            profiles = self.profiles.list()
+            if len(profiles) == 1:
+                profile = profiles[0]
+                return profile["ip"], profile["name"], f"profile:{profile['name'].lower()}:{profile['ip']}"
+            if len(profiles) > 1:
+                raise ValueError("Több klímaprofil van beállítva; add meg a profil nevét az API URL-ben.")
+
+        identifier = self.device_identifier
+        return identifier, None, f"device:{identifier or 'automatic'}"
+
+    def _query_climate(self, identifier: str | None) -> dict[str, Any]:
         try:
-            return self.climate.query(self.device_identifier)
+            return self.climate.query(identifier)
         except ValueError:
-            self.climate.scan(self._target_ip())
-            return self.climate.query(self.device_identifier)
+            self.climate.scan(self._target_ip(identifier))
+            return self.climate.query(identifier)
 
-    def _control_climate(self, changes: dict[str, Any]) -> dict[str, Any]:
+    def _control_climate(self, changes: dict[str, Any], identifier: str | None) -> dict[str, Any]:
         try:
-            return self.climate.control(changes, self.device_identifier)
+            return self.climate.control(changes, identifier)
         except ValueError as original_error:
             # Discovery errors are recoverable. Validation errors from an already
             # selected device must be returned to the caller unchanged.
             try:
-                self.climate.scan(self._target_ip())
-                return self.climate.control(changes, self.device_identifier)
+                self.climate.scan(self._target_ip(identifier))
+                return self.climate.control(changes, identifier)
             except ValueError:
                 raise original_error
 
-    def _target_ip(self) -> str | None:
-        if not self.device_identifier:
+    @staticmethod
+    def _target_ip(identifier: str | None) -> str | None:
+        if not identifier:
             return None
         try:
-            return str(ipaddress.IPv4Address(self.device_identifier))
+            return str(ipaddress.IPv4Address(identifier))
         except ipaddress.AddressValueError:
             return None
 
     @staticmethod
-    def _semantic_state(result: dict[str, Any]) -> dict[str, Any]:
+    def _semantic_state(result: dict[str, Any], climate_name: str | None = None) -> dict[str, Any]:
         state = result.get("state") or {}
         device = result.get("device") or {}
         unit = str(state.get("temperatureUnit") or "°C").replace("°", "")
@@ -224,6 +243,7 @@ class TapHomeGateway:
             "apiVersion": "1.0",
             "online": True,
             "updatedAt": result.get("updatedAt") or utc_now(),
+            "climateName": climate_name,
             "deviceName": device.get("name"),
             "deviceMac": device.get("mac"),
             "deviceIp": device.get("ip"),

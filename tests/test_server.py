@@ -1,10 +1,13 @@
 import http.client
 import json
 import queue
+import tempfile
 import threading
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
+from climate_profiles import ClimateProfileStore
 from server import AppHandler, AppServer, ClimateGateway, SerialMonitor, extract_numeric_values
 from taphome_gateway import TapHomeGateway
 
@@ -55,7 +58,7 @@ class FakeClimateGateway:
         return {"available": True, "target": target, "lastScanAt": "2026-11-18T10:00:00Z", "devices": self.devices}
 
     def query(self, identifier=None):
-        if identifier != SAMPLE_DEVICE["mac"]:
+        if identifier not in (SAMPLE_DEVICE["mac"], SAMPLE_DEVICE["ip"]):
             raise ValueError("Ismeretlen klíma")
         self.query_count += 1
         return {
@@ -67,7 +70,7 @@ class FakeClimateGateway:
         }
 
     def control(self, changes, identifier=None):
-        if identifier != SAMPLE_DEVICE["mac"]:
+        if identifier not in (SAMPLE_DEVICE["mac"], SAMPLE_DEVICE["ip"]):
             raise ValueError("Ismeretlen klíma")
         self.changes.append(changes)
         for key, value in changes.items():
@@ -130,6 +133,29 @@ class ClimateGatewayTests(unittest.TestCase):
             ClimateGateway._validate_target("gree.local")
 
 
+class ClimateProfileStoreTests(unittest.TestCase):
+    def test_persists_named_ip_profiles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "climates.json"
+            store = ClimateProfileStore(path)
+            store.upsert("Nappali", "192.168.1.73")
+            store.upsert("Halo_emelet", "192.168.1.74")
+
+            restored = ClimateProfileStore(path)
+            self.assertEqual(
+                restored.list(),
+                [
+                    {"name": "Halo_emelet", "ip": "192.168.1.74"},
+                    {"name": "Nappali", "ip": "192.168.1.73"},
+                ],
+            )
+
+    def test_rejects_name_that_is_not_api_safe(self):
+        store = ClimateProfileStore()
+        with self.assertRaisesRegex(ValueError, "szóköz"):
+            store.upsert("Nappali klíma", "192.168.1.73")
+
+
 class TapHomeGatewayTests(unittest.TestCase):
     def setUp(self):
         self.climate = FakeClimateGateway()
@@ -177,14 +203,27 @@ class TapHomeGatewayTests(unittest.TestCase):
         self.gateway.read()
         self.assertEqual(self.climate.query_count, 1)
 
+    def test_resolves_named_profile_to_its_ip(self):
+        profiles = ClimateProfileStore()
+        profiles.upsert("Nappali", SAMPLE_DEVICE["ip"])
+        gateway = TapHomeGateway(self.climate, profiles=profiles)
+        state = gateway.read("Nappali")
+        self.assertEqual(state["climateName"], "Nappali")
+        self.assertEqual(state["deviceIp"], SAMPLE_DEVICE["ip"])
+
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.monitor = SerialMonitor()
         self.climate = FakeClimateGateway()
         self.climate.devices = [SAMPLE_DEVICE]
-        self.taphome = TapHomeGateway(self.climate, device_identifier=SAMPLE_DEVICE["mac"])
-        self.server = AppServer(("127.0.0.1", 0), AppHandler, self.monitor, self.climate, self.taphome)
+        self.profiles = ClimateProfileStore()
+        self.taphome = TapHomeGateway(
+            self.climate, profiles=self.profiles, device_identifier=SAMPLE_DEVICE["mac"]
+        )
+        self.server = AppServer(
+            ("127.0.0.1", 0), AppHandler, self.monitor, self.climate, self.taphome, self.profiles
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.server_address[1]
@@ -259,6 +298,30 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Nem támogatott TapHome mező", json.loads(payload)["error"])
 
+    def test_named_profiles_select_climate_for_taphome(self):
+        status, _, payload = self.request(
+            "POST", "/api/ac/profiles", '{"name":"Nappali","ip":"192.168.1.73"}'
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload)["profile"]["name"], "Nappali")
+
+        status, _, payload = self.request("GET", "/api/taphome/ac/Nappali")
+        self.assertEqual(status, 200)
+        response = json.loads(payload)
+        self.assertEqual(response["climateName"], "Nappali")
+        self.assertEqual(response["deviceIp"], "192.168.1.73")
+
+        status, _, _ = self.request("POST", "/api/taphome/ac/Nappali", '{"power":false}')
+        self.assertEqual(status, 200)
+        self.assertEqual(self.climate.changes[-1], {"power": False})
+
+    def test_multiple_profiles_require_name_in_taphome_url(self):
+        self.profiles.upsert("Nappali", "192.168.1.73")
+        self.profiles.upsert("Halo", "192.168.1.74")
+        status, _, payload = self.request("GET", "/api/taphome/ac")
+        self.assertEqual(status, 400)
+        self.assertIn("add meg a profil nevét", json.loads(payload)["error"])
+
     def test_serves_valid_packet_parser_template(self):
         status, content_type, payload = self.request("GET", "/api/taphome/template.xml")
         self.assertEqual(status, 200)
@@ -266,7 +329,8 @@ class ApiTests(unittest.TestCase):
         root = ET.fromstring(payload)
         self.assertEqual(root.tag, "Templates")
         self.assertIn(b"PacketParserThermostat", payload)
-        self.assertIn(b"/api/taphome/ac", payload)
+        self.assertIn(b"/api/taphome/ac/$[ClimateName]", payload)
+        self.assertIn(b"<Id>ClimateName</Id>", payload)
 
 
 if __name__ == "__main__":

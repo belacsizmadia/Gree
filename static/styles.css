@@ -132,6 +132,13 @@ button:disabled { cursor: wait; opacity: .55; }
 .api-tag { padding: 7px 9px; border: 1px solid rgba(99, 198, 231, .28); color: var(--blue); font: 8px var(--mono); letter-spacing: .08em; }
 .climate-layout { display: grid; grid-template-columns: minmax(280px, .72fr) minmax(0, 1.28fr); }
 .climate-controls { padding: 23px; border-right: 1px solid var(--line); background: rgba(11, 18, 16, .44); }
+.profile-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.profile-fields > div { min-width: 0; }
+.profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 10px; }
+.profile-actions button { min-height: 39px; }
+.profile-delete { height: auto; color: var(--red); border-color: rgba(255, 116, 108, .35); }
+.profile-delete:hover:not(:disabled) { background: rgba(255, 116, 108, .08); }
+.form-divider { height: 1px; margin: 19px 0 10px; background: var(--line); }
 .field-help { margin: 7px 0 0; color: #637169; font: 8px/1.5 var(--mono); }
 .climate-scan, .climate-query { width: 100%; min-height: 42px; margin-top: 14px; }
 .climate-scan { display: flex; align-items: center; justify-content: space-between; padding: 0 13px; }
@@ -251,6 +258,7 @@ button:disabled { cursor: wait; opacity: .55; }
   .metric, .metric:nth-child(2) { border-right: 0; border-bottom: 1px solid var(--line); }
   .metric:last-child { border-bottom: 0; }
   .button-row { grid-template-columns: 1fr; }
+  .profile-fields, .profile-actions { grid-template-columns: 1fr; }
   .climate-heading { align-items: flex-start; flex-direction: column; }
   .climate-values { grid-template-columns: 1fr 1fr; }
   .gateway-status { align-items: flex-start; flex-wrap: wrap; padding-block: 14px; }

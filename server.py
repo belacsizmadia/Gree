@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from climate_profiles import ClimateProfileStore
 from taphome_gateway import TapHomeGateway
 
 try:
@@ -617,11 +618,13 @@ class AppServer(ThreadingHTTPServer):
         monitor: SerialMonitor,
         climate: ClimateGateway | None = None,
         taphome: TapHomeGateway | None = None,
+        profiles: ClimateProfileStore | None = None,
     ):
         super().__init__(address, handler)
         self.monitor = monitor
         self.climate = climate or ClimateGateway()
-        self.taphome = taphome or TapHomeGateway(self.climate)
+        self.profiles = profiles or ClimateProfileStore()
+        self.taphome = taphome or TapHomeGateway(self.climate, profiles=self.profiles)
 
     def handle_error(self, request: Any, client_address: tuple[str, int]) -> None:
         """Browser reloads commonly reset an SSE socket; that is not a server error."""
@@ -647,6 +650,10 @@ class AppHandler(BaseHTTPRequestHandler):
     def taphome(self) -> TapHomeGateway:
         return self.server.taphome  # type: ignore[attr-defined,no-any-return]
 
+    @property
+    def profiles(self) -> ClimateProfileStore:
+        return self.server.profiles  # type: ignore[attr-defined,no-any-return]
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -656,11 +663,13 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json({"ports": [port.as_dict() for port in self.monitor.available_ports()]})
         elif path == "/api/ac/devices":
             self._send_json(self.climate.overview())
+        elif path == "/api/ac/profiles":
+            self._send_json({"profiles": self.profiles.list()})
         elif path == "/api/taphome/status":
             self._send_json(self.taphome.status())
-        elif path in ("/api/taphome/ac", "/api/taphome/gree-ac"):
+        elif path in ("/api/taphome/ac", "/api/taphome/gree-ac") or path.startswith("/api/taphome/ac/"):
             try:
-                self._send_json(self.taphome.read())
+                self._send_json(self.taphome.read(self._taphome_name(path)))
             except ValueError as error:
                 self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             except ClimateGatewayUnavailable as error:
@@ -706,12 +715,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 body = self._read_json(optional=True)
                 target = str(body.get("target", "")).strip() or None
                 self._send_json(self.climate.scan(target))
-            elif path == "/api/taphome/sync":
-                self._read_json(optional=True)
-                self._send_json(self.taphome.sync_now())
-            elif path in ("/api/taphome/ac", "/api/taphome/gree-ac"):
+            elif path == "/api/ac/profiles":
                 body = self._read_json()
-                self._send_json(self.taphome.control(body))
+                profile = self.profiles.upsert(body.get("name"), body.get("ip"))
+                self._send_json({"profile": profile, "profiles": self.profiles.list()})
+            elif path == "/api/ac/profiles/delete":
+                body = self._read_json()
+                profile = self.profiles.delete(body.get("name"))
+                self._send_json({"deleted": profile, "profiles": self.profiles.list()})
+            elif path == "/api/taphome/sync":
+                body = self._read_json(optional=True)
+                self._send_json(self.taphome.sync_now(str(body.get("name", "")).strip() or None))
+            elif path in ("/api/taphome/ac", "/api/taphome/gree-ac") or path.startswith("/api/taphome/ac/"):
+                body = self._read_json()
+                self._send_json(self.taphome.control(body, self._taphome_name(path)))
             else:
                 self._send_json({"error": "Ismeretlen végpont."}, HTTPStatus.NOT_FOUND)
         except ClimateGatewayUnavailable as error:
@@ -738,6 +755,16 @@ class AppHandler(BaseHTTPRequestHandler):
         if not isinstance(value, dict):
             raise ValueError("A kérésnek JSON objektumnak kell lennie.")
         return value
+
+    @staticmethod
+    def _taphome_name(path: str) -> str | None:
+        prefix = "/api/taphome/ac/"
+        if not path.startswith(prefix):
+            return None
+        name = unquote(path[len(prefix):]).strip()
+        if not name or "/" in name:
+            raise ValueError("Érvénytelen klímaprofil az API URL-ben.")
+        return name
 
     def _send_json(self, value: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
@@ -820,6 +847,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ac-host", default=os.environ.get("GREE_AC_HOST"))
     parser.add_argument("--taphome-device", default=os.environ.get("GREE_TAPHOME_DEVICE"))
     parser.add_argument(
+        "--config", default=os.environ.get("GREE_CONFIG_PATH", str(APP_DIR / "data" / "climates.json"))
+    )
+    parser.add_argument(
         "--taphome-cache", type=float, default=float(os.environ.get("GREE_TAPHOME_CACHE_SECONDS", "1"))
     )
     return parser.parse_args()
@@ -829,12 +859,14 @@ def main() -> None:
     args = parse_args()
     monitor = SerialMonitor()
     climate = ClimateGateway(default_target=args.ac_host)
+    profiles = ClimateProfileStore(args.config)
     taphome = TapHomeGateway(
         climate,
+        profiles=profiles,
         device_identifier=args.taphome_device,
         cache_seconds=args.taphome_cache,
     )
-    httpd = AppServer((args.host, args.port), AppHandler, monitor, climate, taphome)
+    httpd = AppServer((args.host, args.port), AppHandler, monitor, climate, taphome, profiles)
 
     if args.demo:
         monitor.start_demo()

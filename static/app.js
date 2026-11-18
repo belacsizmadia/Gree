@@ -30,6 +30,11 @@ const elements = {
   chartEmpty: $("#chartEmpty"),
   chartLegend: $("#chartLegend"),
   climateForm: $("#climateForm"),
+  climateProfile: $("#climateProfile"),
+  climateProfileName: $("#climateProfileName"),
+  climateProfileSave: $("#climateProfileSave"),
+  climateProfileDelete: $("#climateProfileDelete"),
+  climateProfileHelp: $("#climateProfileHelp"),
   climateTarget: $("#climateTarget"),
   climateScan: $("#climateScan"),
   climateDevice: $("#climateDevice"),
@@ -61,6 +66,7 @@ const state = {
   sessionBytes: 0,
   toastTimer: null,
   climateDevices: [],
+  climateProfiles: [],
 };
 
 const COLORS = ["#b8f231", "#63c6e7", "#ff9f58", "#e98bd6", "#aa9cff", "#ff746c"];
@@ -114,6 +120,81 @@ function setClimateNote(message, isError = false) {
   if (isError) showToast(message, true);
 }
 
+function renderClimateProfiles(profiles, selectedName = elements.climateProfile.value) {
+  state.climateProfiles = profiles;
+  elements.climateProfile.replaceChildren(new Option("Nincs mentett profil", ""));
+  profiles.forEach((profile) => {
+    elements.climateProfile.add(new Option(`${profile.name} · ${profile.ip}`, profile.name));
+  });
+  const selected = profiles.find((profile) => profile.name.toLowerCase() === selectedName.toLowerCase());
+  if (selected) elements.climateProfile.value = selected.name;
+  elements.climateProfileDelete.disabled = !selected;
+}
+
+function selectClimateProfile() {
+  const profile = state.climateProfiles.find((item) => item.name === elements.climateProfile.value);
+  elements.climateProfileDelete.disabled = !profile;
+  if (!profile) return;
+  elements.climateProfileName.value = profile.name;
+  elements.climateTarget.value = profile.ip;
+  elements.climateProfileHelp.textContent = `TapHome API: /api/taphome/ac/${profile.name}`;
+}
+
+async function loadClimateProfiles() {
+  try {
+    const result = await api("/api/ac/profiles");
+    renderClimateProfiles(result.profiles || []);
+    if (result.profiles?.length === 1) {
+      elements.climateProfile.value = result.profiles[0].name;
+      selectClimateProfile();
+    }
+  } catch (error) {
+    setClimateNote(error.message, true);
+  }
+}
+
+async function saveClimateProfile() {
+  elements.climateProfileSave.disabled = true;
+  try {
+    const result = await api("/api/ac/profiles", {
+      method: "POST",
+      body: JSON.stringify({
+        name: elements.climateProfileName.value.trim(),
+        ip: elements.climateTarget.value.trim(),
+      }),
+    });
+    renderClimateProfiles(result.profiles || [], result.profile.name);
+    selectClimateProfile();
+    showToast(`${result.profile.name} klímaprofil elmentve.`);
+    loadTapHomeStatus();
+  } catch (error) {
+    setClimateNote(error.message, true);
+  } finally {
+    elements.climateProfileSave.disabled = false;
+  }
+}
+
+async function deleteClimateProfile() {
+  const name = elements.climateProfile.value;
+  if (!name || !window.confirm(`Törlöd ezt a klímaprofilt: ${name}?`)) return;
+  elements.climateProfileDelete.disabled = true;
+  try {
+    const result = await api("/api/ac/profiles/delete", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    renderClimateProfiles(result.profiles || [], "");
+    elements.climateProfileName.value = "";
+    elements.climateTarget.value = "";
+    elements.climateProfileHelp.textContent = "A profilnév lesz az API és a TapHome sablon klímaazonosítója.";
+    showToast(`${name} klímaprofil törölve.`);
+    loadTapHomeStatus();
+  } catch (error) {
+    setClimateNote(error.message, true);
+    elements.climateProfileDelete.disabled = false;
+  }
+}
+
 function renderClimateDevices(devices) {
   const previous = elements.climateDevice.value;
   state.climateDevices = devices;
@@ -151,7 +232,7 @@ async function loadTapHomeStatus() {
     if (!gateway.available) elements.tapHomeStatus.textContent = "A Gree Wi-Fi kliens nincs telepítve";
     else if (gateway.error) elements.tapHomeStatus.textContent = gateway.error;
     else if (gateway.connected) elements.tapHomeStatus.textContent = `Klímaadat elérhető · ${gateway.lastReadAt ? new Date(gateway.lastReadAt).toLocaleTimeString("hu-HU", { hour12: false }) : "—"}`;
-    else if (gateway.running) elements.tapHomeStatus.textContent = "Packet Parser API kész, első lekérésre vár";
+    else if (gateway.running) elements.tapHomeStatus.textContent = `${gateway.profiles?.length || 0} klímaprofil · Packet Parser API kész`;
     else elements.tapHomeStatus.textContent = "HTTP gateway indításra vár";
   } catch (error) {
     elements.tapHomeDot.classList.add("error");
@@ -592,6 +673,9 @@ elements.clearButton.addEventListener("click", clearData);
 elements.exportButton.addEventListener("click", exportData);
 elements.climateScan.addEventListener("click", scanClimate);
 elements.climateForm.addEventListener("submit", queryClimate);
+elements.climateProfile.addEventListener("change", selectClimateProfile);
+elements.climateProfileSave.addEventListener("click", saveClimateProfile);
+elements.climateProfileDelete.addEventListener("click", deleteClimateProfile);
 $$('[data-format]').forEach((button) => button.addEventListener("click", () => {
   state.format = button.dataset.format;
   $$('[data-format]').forEach((candidate) => candidate.classList.toggle("active", candidate === button));
@@ -607,6 +691,7 @@ setInterval(loadTapHomeStatus, 5000);
 Promise.all([
   loadPorts(),
   loadClimateOverview(),
+  loadClimateProfiles(),
   loadTapHomeStatus(),
   api("/api/status").then(applyStatus).catch((error) => setFormError(error.message)),
 ]);

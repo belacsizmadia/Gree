@@ -26,13 +26,18 @@
         <Value>5000</Value>
         <Id>PollInterval</Id>
       </Parameter>
+      <Parameter>
+        <Name>Klima profilneve</Name>
+        <Value>Nappali</Value>
+        <Id>ClimateName</Id>
+      </Parameter>
     </ImportParameters>
     <Module>
       <Name>Gree AC HTTP gateway</Name>
       <Id>-1</Id>
       <Model>PacketParserModuleHttp</Model>
       <DeviceProperties>
-        <ReadScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "GET", "");
+        <ReadScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "GET", "");
 IF response.IsSuccess
   acState := response.Content;
 ELSE
@@ -64,7 +69,7 @@ END</ReadScriptPacketParser>
             <OnStateName>${general_on}</OnStateName>
             <OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "power"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"power\":" + IF(St, "true", "false") + "}");
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"power\":" + IF(St, "true", "false") + "}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteSwitchStateScriptPacketParser>
@@ -87,7 +92,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadTemperatureSetPointScriptPacketParser>PARSEJSON(acState, "targetTemperature")</ReadTemperatureSetPointScriptPacketParser>
             <ReadHumidityScriptPacketParser>VAR humidity := PARSEJSON(acState, "currentHumidity");
 IF(ISNULL(humidity), NaN, humidity / 100.0)</ReadHumidityScriptPacketParser>
-            <WriteTemperatureSetPointScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"targetTemperature\":" + Se + "}");
+            <WriteTemperatureSetPointScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"targetTemperature\":" + Se + "}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteTemperatureSetPointScriptPacketParser>
@@ -110,7 +115,7 @@ END</WriteTemperatureSetPointScriptPacketParser>
             <OffStateValue>-1</OffStateValue>
             <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "mode"), "auto", 0, "cool", 1, "dry", 2, "fan", 3, "heat", 4, NaN)</ReadSwitchStateScriptPacketParser>
             <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "auto", 1, "cool", 2, "dry", 3, "fan", 4, "heat", "");
-VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"mode\":\"" + value + "\"}");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"mode\":\"" + value + "\"}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteSwitchStateScriptPacketParser>
@@ -133,7 +138,7 @@ END</WriteSwitchStateScriptPacketParser>
             <OffStateValue>-1</OffStateValue>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "turbo"), 6, SWITCH(PARSEJSON(acState, "fanSpeed"), "auto", 0, "low", 1, "mediumlow", 2, "medium", 3, "mediumhigh", 4, "high", 5, NaN))</ReadSwitchStateScriptPacketParser>
             <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "auto", 1, "low", 2, "mediumlow", 3, "medium", 4, "mediumhigh", 5, "high", 6, "high", "");
-VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"fanSpeed\":\"" + value + "\",\"turbo\":" + IF(Mu = 6, "true", "false") + "}");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"fanSpeed\":\"" + value + "\",\"turbo\":" + IF(Mu = 6, "true", "false") + "}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteSwitchStateScriptPacketParser>
@@ -156,7 +161,7 @@ END</WriteSwitchStateScriptPacketParser>
             <OffStateValue>-1</OffStateValue>
             <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "horizontalSwing"), "default", 0, "fullswing", 1, "left", 2, "leftcenter", 3, "center", 4, "rightcenter", 5, "right", 6, NaN)</ReadSwitchStateScriptPacketParser>
             <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "default", 1, "fullswing", 2, "left", 3, "leftcenter", 4, "center", 5, "rightcenter", 6, "right", "");
-VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"horizontalSwing\":\"" + value + "\"}");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"horizontalSwing\":\"" + value + "\"}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteSwitchStateScriptPacketParser>
@@ -179,7 +184,7 @@ END</WriteSwitchStateScriptPacketParser>
             <OffStateValue>-1</OffStateValue>
             <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "verticalSwing"), "default", 0, "fullswing", 1, "fixedupper", 2, "fixeduppermiddle", 3, "fixedmiddle", 4, "fixedlowermiddle", 5, "fixedlower", 6, NaN)</ReadSwitchStateScriptPacketParser>
             <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "default", 1, "fullswing", 2, "fixedupper", 3, "fixeduppermiddle", 4, "fixedmiddle", 5, "fixedlowermiddle", 6, "fixedlower", "");
-VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"verticalSwing\":\"" + value + "\"}");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"verticalSwing\":\"" + value + "\"}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteSwitchStateScriptPacketParser>
@@ -202,7 +207,7 @@ END</WriteSwitchStateScriptPacketParser>
             <OffStateValue>-1</OffStateValue>
             <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "verticalSwing"), "default", 0, "fullswing", 1, "swingupper", 2, "swinguppermiddle", 3, "swingmiddle", 4, "swinglowermiddle", 5, "swinglower", 6, NaN)</ReadSwitchStateScriptPacketParser>
             <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "default", 1, "fullswing", 2, "swingupper", 3, "swinguppermiddle", 4, "swingmiddle", 5, "swinglowermiddle", 6, "swinglower", "");
-VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"verticalSwing\":\"" + value + "\"}");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"verticalSwing\":\"" + value + "\"}");
 IF response.IsSuccess = false
   ADDERROR(response.StatusCode);
 END</WriteSwitchStateScriptPacketParser>
@@ -216,7 +221,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
             <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "freshAir"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"freshAir\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"freshAir\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
           </DeviceProperties>
         </Device>
         <Device>
@@ -227,7 +232,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
             <NegateState>False</NegateState><OnStateIconId>184</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "sleep"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"sleep\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"sleep\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
           </DeviceProperties>
         </Device>
         <Device>
@@ -238,7 +243,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
             <NegateState>False</NegateState><OnStateIconId>183</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "quiet"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"quiet\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"quiet\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
           </DeviceProperties>
         </Device>
         <Device>
@@ -249,7 +254,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
             <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "light"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"light\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"light\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
           </DeviceProperties>
         </Device>
         <Device>
@@ -260,7 +265,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
             <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "xfan"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"xfan\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"xfan\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
           </DeviceProperties>
         </Device>
         <Device>
@@ -271,7 +276,7 @@ END</WriteSwitchStateScriptPacketParser>
             <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
             <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
             <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "anion"), 1, 0)</ReadSwitchStateScriptPacketParser>
-            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"anion\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac/$[ClimateName]", "POST", "{\"anion\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
           </DeviceProperties>
         </Device>
         <Device>
