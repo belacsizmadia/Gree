@@ -1,5 +1,5 @@
 [Unit]
-Description=Gree USB serial web monitor
+Description=Gree local climate and USB web monitor
 After=network-online.target
 Wants=network-online.target
 

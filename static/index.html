@@ -4,19 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0d1512" />
-    <meta name="description" content="USB soros adatok valós idejű Raspberry Pi monitorja" />
-    <title>Gree / USB Monitor</title>
+    <meta name="description" content="Gree klíma- és USB-adatok helyi Raspberry Pi monitorja" />
+    <title>Gree / Local Monitor</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Gree USB Monitor kezdőlap">
+      <a class="brand" href="/" aria-label="Gree Local Monitor kezdőlap">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>
           <strong>GREE</strong>
-          <small>USB MONITOR</small>
+          <small>LOCAL MONITOR</small>
         </span>
       </a>
       <div class="topbar-meta">
@@ -30,11 +30,11 @@
     <main>
       <section class="hero panel-grid">
         <div class="hero-copy">
-          <p class="eyebrow">ÉLŐ ADATFOLYAM <span>01</span></p>
-          <h1>Lásd, mi érkezik<br /><em>a vezetéken.</em></h1>
+          <p class="eyebrow">HELYI KLÍMAADATOK <span>01</span></p>
+          <h1>Lásd, mit csinál<br /><em>a klímád.</em></h1>
           <p class="intro">
-            Soros USB-adatok valós időben, közvetlenül a Raspberry Pi-ről.
-            Mérés, diagnosztika és nyers bájtok egyetlen tiszta felületen.
+            Gree Wi-Fi állapot helyi HTTP API-n és soros USB-adatok valós időben,
+            közvetlenül a Raspberry Pi-ről — felhőkapcsolat nélkül.
           </p>
         </div>
 
@@ -86,6 +86,61 @@
         </aside>
       </section>
 
+      <section class="climate-card dashboard-card" aria-labelledby="climateTitle">
+        <header class="section-heading climate-heading">
+          <div>
+            <p class="eyebrow">WI-FI KLÍMA <span>02</span></p>
+            <h2 id="climateTitle">Helyi állapotlekérés</h2>
+          </div>
+          <span class="api-tag">GET /api/ac/status</span>
+        </header>
+        <div class="climate-layout">
+          <form class="climate-controls" id="climateForm">
+            <label for="climateTarget">Klíma IPv4-címe <span>opcionális</span></label>
+            <input id="climateTarget" type="text" inputmode="decimal" placeholder="pl. 192.168.1.73" autocomplete="off" />
+            <p class="field-help">Üresen hagyva az alkalmazás a teljes helyi hálózaton keres.</p>
+
+            <button class="secondary-button climate-scan" id="climateScan" type="button">
+              <span>Klíma felderítése</span><span aria-hidden="true">⌖</span>
+            </button>
+
+            <label for="climateDevice">Felderített eszköz</label>
+            <div class="select-wrap">
+              <select id="climateDevice">
+                <option value="">Még nincs felderített klíma</option>
+              </select>
+            </div>
+            <button class="primary-button climate-query" id="climateQuery" type="submit" disabled>
+              <span>Adatok lekérése</span><span aria-hidden="true">↗</span>
+            </button>
+            <p class="form-note" id="climateNote">A klímát előbb a Gree+ alkalmazással csatlakoztasd ugyanahhoz a Wi-Fihez.</p>
+          </form>
+
+          <div class="climate-state" id="climateState" aria-live="polite">
+            <div class="climate-summary">
+              <div>
+                <span class="ac-status-dot" id="climateDot"></span>
+                <p><strong id="climateName">Nincs adat</strong><small id="climateMeta">Felderítésre vár</small></p>
+              </div>
+              <strong class="power-state" id="climatePower">—</strong>
+            </div>
+            <div class="climate-values">
+              <article><small>SZOBA</small><strong id="climateRoom">—</strong></article>
+              <article><small>CÉLÉRTÉK</small><strong id="climateTargetTemp">—</strong></article>
+              <article><small>ÜZEMMÓD</small><strong id="climateMode">—</strong></article>
+              <article><small>VENTILÁTOR</small><strong id="climateFan">—</strong></article>
+            </div>
+            <div class="climate-flags" id="climateFlags">
+              <span>CSENDES <b>—</b></span><span>TURBÓ <b>—</b></span><span>ALVÁS <b>—</b></span><span>FÉNY <b>—</b></span>
+            </div>
+            <details class="raw-state">
+              <summary>Nyers klímaállapot</summary>
+              <pre id="climateRaw">{}</pre>
+            </details>
+          </div>
+        </div>
+      </section>
+
       <section class="metrics" aria-label="Adatfolyam statisztika">
         <article class="metric">
           <span class="metric-index">01</span>
@@ -109,7 +164,7 @@
         <article class="chart-card dashboard-card">
           <header class="section-heading">
             <div>
-              <p class="eyebrow">TELEMETRIA <span>02</span></p>
+              <p class="eyebrow">TELEMETRIA <span>03</span></p>
               <h2>Numerikus értékek</h2>
             </div>
             <span class="live-tag"><i></i> ÉLŐ</span>
@@ -128,7 +183,7 @@
         <article class="stream-card dashboard-card">
           <header class="section-heading stream-heading">
             <div>
-              <p class="eyebrow">NYERS FOLYAM <span>03</span></p>
+              <p class="eyebrow">NYERS FOLYAM <span>04</span></p>
               <h2>Beérkező adatok</h2>
             </div>
             <div class="stream-actions">

@@ -29,6 +29,22 @@ const elements = {
   canvas: $("#signalChart"),
   chartEmpty: $("#chartEmpty"),
   chartLegend: $("#chartLegend"),
+  climateForm: $("#climateForm"),
+  climateTarget: $("#climateTarget"),
+  climateScan: $("#climateScan"),
+  climateDevice: $("#climateDevice"),
+  climateQuery: $("#climateQuery"),
+  climateNote: $("#climateNote"),
+  climateDot: $("#climateDot"),
+  climateName: $("#climateName"),
+  climateMeta: $("#climateMeta"),
+  climatePower: $("#climatePower"),
+  climateRoom: $("#climateRoom"),
+  climateTargetTemp: $("#climateTargetTemp"),
+  climateMode: $("#climateMode"),
+  climateFan: $("#climateFan"),
+  climateFlags: $("#climateFlags"),
+  climateRaw: $("#climateRaw"),
 };
 
 const state = {
@@ -41,6 +57,7 @@ const state = {
   sessionPackets: 0,
   sessionBytes: 0,
   toastTimer: null,
+  climateDevices: [],
 };
 
 const COLORS = ["#b8f231", "#63c6e7", "#ff9f58", "#e98bd6", "#aa9cff", "#ff746c"];
@@ -85,6 +102,128 @@ async function loadPorts() {
     setFormError(error.message);
   } finally {
     elements.refreshPorts.classList.remove("loading");
+  }
+}
+
+function setClimateNote(message, isError = false) {
+  elements.climateNote.textContent = message;
+  elements.climateNote.classList.toggle("error", isError);
+  if (isError) showToast(message, true);
+}
+
+function renderClimateDevices(devices) {
+  const previous = elements.climateDevice.value;
+  state.climateDevices = devices;
+  elements.climateDevice.replaceChildren();
+  if (!devices.length) {
+    elements.climateDevice.add(new Option("Nem található Gree klíma", ""));
+    elements.climateQuery.disabled = true;
+    return;
+  }
+  devices.forEach((device) => {
+    const detail = [device.name, device.model, device.ip].filter(Boolean).join(" · ");
+    elements.climateDevice.add(new Option(detail, device.mac));
+  });
+  if (devices.some((device) => device.mac === previous)) elements.climateDevice.value = previous;
+  elements.climateQuery.disabled = false;
+}
+
+async function loadClimateOverview() {
+  try {
+    const overview = await api("/api/ac/devices");
+    if (overview.configuredTarget && !elements.climateTarget.value) elements.climateTarget.value = overview.configuredTarget;
+    renderClimateDevices(overview.devices || []);
+    if (!overview.available) setClimateNote("A Gree Wi-Fi kliens nincs telepítve a szerveren.", true);
+  } catch (error) {
+    setClimateNote(error.message, true);
+  }
+}
+
+function setClimateBusy(busy) {
+  elements.climateScan.disabled = busy;
+  elements.climateQuery.disabled = busy || !state.climateDevices.length;
+}
+
+async function scanClimate() {
+  setClimateBusy(true);
+  setClimateNote("Helyi Gree eszközök keresése…");
+  try {
+    const result = await api("/api/ac/scan", {
+      method: "POST",
+      body: JSON.stringify({ target: elements.climateTarget.value.trim() }),
+    });
+    renderClimateDevices(result.devices || []);
+    if (!result.devices.length) {
+      setClimateNote("Nem érkezett válasz. Ellenőrizd a Wi-Fi kapcsolatot és az IP-címet.", true);
+    } else {
+      setClimateNote(`${result.devices.length} Gree eszköz felderítve.`);
+      showToast("A klíma elérhető a helyi hálózaton.");
+    }
+  } catch (error) {
+    setClimateNote(error.message, true);
+  } finally {
+    setClimateBusy(false);
+  }
+}
+
+const CLIMATE_LABELS = {
+  auto: "Automata", cool: "Hűtés", dry: "Párátlanítás", fan: "Ventilátor", heat: "Fűtés",
+  low: "Alacsony", mediumlow: "Közepes–alacsony", medium: "Közepes", mediumhigh: "Közepes–magas", high: "Magas",
+};
+
+function translatedClimateValue(value) {
+  if (!value) return "—";
+  return CLIMATE_LABELS[value] || value;
+}
+
+function temperature(value, unit) {
+  return value === null || value === undefined ? "—" : `${value}${unit || "°C"}`;
+}
+
+function yesNo(value) {
+  if (value === null || value === undefined) return "—";
+  return value ? "BE" : "KI";
+}
+
+function renderClimateStatus(result) {
+  const ac = result.state || {};
+  const device = result.device || {};
+  elements.climateDot.classList.add("online");
+  elements.climateName.textContent = device.name || device.model || "Gree klíma";
+  elements.climateMeta.textContent = [device.ip, device.model, result.firmware ? `FW ${result.firmware}` : null].filter(Boolean).join(" · ");
+  elements.climatePower.textContent = ac.power ? "BEKAPCSOLVA" : "KIKAPCSOLVA";
+  elements.climatePower.classList.toggle("on", Boolean(ac.power));
+  elements.climateRoom.textContent = temperature(ac.currentTemperature, ac.temperatureUnit);
+  elements.climateTargetTemp.textContent = temperature(ac.targetTemperature, ac.temperatureUnit);
+  elements.climateMode.textContent = translatedClimateValue(ac.mode?.name);
+  elements.climateFan.textContent = translatedClimateValue(ac.fanSpeed?.name);
+  const flags = [["CSENDES", ac.quiet], ["TURBÓ", ac.turbo], ["ALVÁS", ac.sleep], ["FÉNY", ac.light]];
+  elements.climateFlags.replaceChildren(...flags.map(([label, value]) => {
+    const flag = document.createElement("span");
+    flag.append(`${label} `);
+    const mark = document.createElement("b");
+    mark.textContent = yesNo(value);
+    flag.append(mark);
+    return flag;
+  }));
+  elements.climateRaw.textContent = JSON.stringify(result, null, 2);
+}
+
+async function queryClimate(event) {
+  event.preventDefault();
+  if (!elements.climateDevice.value) return;
+  setClimateBusy(true);
+  setClimateNote("Klímaállapot lekérése…");
+  try {
+    const identifier = encodeURIComponent(elements.climateDevice.value);
+    const result = await api(`/api/ac/status?device=${identifier}`);
+    renderClimateStatus(result);
+    setClimateNote(`Frissítve: ${new Date(result.updatedAt).toLocaleTimeString("hu-HU", { hour12: false })}`);
+  } catch (error) {
+    elements.climateDot.classList.remove("online");
+    setClimateNote(error.message, true);
+  } finally {
+    setClimateBusy(false);
   }
 }
 
@@ -431,6 +570,8 @@ elements.refreshPorts.addEventListener("click", loadPorts);
 elements.pauseButton.addEventListener("click", togglePause);
 elements.clearButton.addEventListener("click", clearData);
 elements.exportButton.addEventListener("click", exportData);
+elements.climateScan.addEventListener("click", scanClimate);
+elements.climateForm.addEventListener("submit", queryClimate);
 $$('[data-format]').forEach((button) => button.addEventListener("click", () => {
   state.format = button.dataset.format;
   $$('[data-format]').forEach((candidate) => candidate.classList.toggle("active", candidate === button));
@@ -442,5 +583,9 @@ setInterval(() => {
   if (elements.lastSeen.dataset.time) updateLastSeen(elements.lastSeen.dataset.time);
 }, 1000);
 
-Promise.all([loadPorts(), api("/api/status").then(applyStatus).catch((error) => setFormError(error.message))]);
+Promise.all([
+  loadPorts(),
+  loadClimateOverview(),
+  api("/api/status").then(applyStatus).catch((error) => setFormError(error.message)),
+]);
 connectEventStream();

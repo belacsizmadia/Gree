@@ -159,6 +159,7 @@ else
     "GREE_PORT=${HTTP_PORT}" \
     '# GREE_SERIAL_PORT=/dev/ttyUSB0' \
     '# GREE_BAUDRATE=115200' \
+    '# GREE_AC_HOST=192.168.1.73' \
     >"${ENV_TMP}"
 fi
 install -m 0644 "${ENV_TMP}" "${INSTALL_DIR}/.env"

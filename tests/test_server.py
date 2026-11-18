@@ -4,7 +4,47 @@ import queue
 import threading
 import unittest
 
-from server import AppHandler, AppServer, SerialMonitor, extract_numeric_values
+from server import AppHandler, AppServer, ClimateGateway, SerialMonitor, extract_numeric_values
+
+
+SAMPLE_DEVICE = {
+    "ip": "192.168.1.73",
+    "port": 7000,
+    "mac": "aabbcc112233",
+    "name": "Gree klíma",
+    "brand": "gree",
+    "model": "gree",
+    "version": "1.0",
+    "mid": None,
+}
+
+
+class FakeClimateGateway:
+    def __init__(self):
+        self.devices = []
+
+    def overview(self):
+        return {"available": True, "configuredTarget": None, "lastScanAt": None, "devices": self.devices}
+
+    def scan(self, target=None):
+        self.devices = [SAMPLE_DEVICE]
+        return {"available": True, "target": target, "lastScanAt": "2026-11-18T10:00:00Z", "devices": self.devices}
+
+    def query(self, identifier=None):
+        if identifier != SAMPLE_DEVICE["mac"]:
+            raise ValueError("Ismeretlen klíma")
+        return {
+            "device": SAMPLE_DEVICE,
+            "updatedAt": "2026-11-18T10:00:01Z",
+            "firmware": "3.31",
+            "state": {
+                "power": True,
+                "mode": {"value": 1, "name": "cool"},
+                "currentTemperature": 23,
+                "targetTemperature": 21,
+            },
+            "raw": {"Pow": 1},
+        }
 
 
 class NumericExtractionTests(unittest.TestCase):
@@ -44,10 +84,20 @@ class MonitorTests(unittest.TestCase):
             monitor.unsubscribe(client)
 
 
+class ClimateGatewayTests(unittest.TestCase):
+    def test_accepts_valid_ipv4_target(self):
+        self.assertEqual(ClimateGateway._validate_target("192.168.1.73"), "192.168.1.73")
+
+    def test_rejects_invalid_target(self):
+        with self.assertRaisesRegex(ValueError, "IPv4"):
+            ClimateGateway._validate_target("gree.local")
+
+
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.monitor = SerialMonitor()
-        self.server = AppServer(("127.0.0.1", 0), AppHandler, self.monitor)
+        self.climate = FakeClimateGateway()
+        self.server = AppServer(("127.0.0.1", 0), AppHandler, self.monitor, self.climate)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.server_address[1]
@@ -77,7 +127,7 @@ class ApiTests(unittest.TestCase):
         status, content_type, payload = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertTrue(content_type.startswith("text/html"))
-        self.assertIn(b"Gree / USB Monitor", payload)
+        self.assertIn(b"Gree / Local Monitor", payload)
 
     def test_demo_endpoint(self):
         status, _, payload = self.request("POST", "/api/demo", "{}")
@@ -87,6 +137,17 @@ class ApiTests(unittest.TestCase):
     def test_rejects_directory_traversal(self):
         status, _, _ = self.request("GET", "/..%2Fserver.py")
         self.assertEqual(status, 404)
+
+    def test_climate_scan_and_status_endpoints(self):
+        status, _, payload = self.request("POST", "/api/ac/scan", '{"target":"192.168.1.73"}')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload)["devices"][0]["ip"], "192.168.1.73")
+
+        status, _, payload = self.request("GET", "/api/ac/status?device=aabbcc112233")
+        self.assertEqual(status, 200)
+        response = json.loads(payload)
+        self.assertTrue(response["state"]["power"])
+        self.assertEqual(response["state"]["currentTemperature"], 23)
 
 
 if __name__ == "__main__":

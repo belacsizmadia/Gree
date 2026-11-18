@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import glob
+import ipaddress
 import json
 import math
 import mimetypes
@@ -22,7 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 try:
     import serial  # type: ignore[import-not-found]
@@ -30,6 +32,33 @@ try:
 except ImportError:  # Demo mode and the UI still work without pyserial.
     serial = None
     list_ports = None
+
+try:
+    from greeclimate.device import (  # type: ignore[import-not-found]
+        Device as ClimateDevice,
+        FanSpeed,
+        HorizontalSwing,
+        Mode,
+        TemperatureUnits,
+        VerticalSwing,
+    )
+    from greeclimate.deviceinfo import DeviceInfo as ClimateDeviceInfo  # type: ignore[import-not-found]
+    from greeclimate.discovery import Discovery as ClimateDiscovery  # type: ignore[import-not-found]
+    from greeclimate.exceptions import (  # type: ignore[import-not-found]
+        DeviceNotBoundError,
+        DeviceTimeoutError,
+    )
+except ImportError:  # The USB monitor remains usable if the Wi-Fi client is not installed.
+    ClimateDevice = None
+    ClimateDeviceInfo = None
+    ClimateDiscovery = None
+    DeviceNotBoundError = None
+    DeviceTimeoutError = None
+    FanSpeed = None
+    HorizontalSwing = None
+    Mode = None
+    TemperatureUnits = None
+    VerticalSwing = None
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -272,13 +301,241 @@ class SerialMonitor:
                     pass
 
 
+class ClimateGatewayError(RuntimeError):
+    """Expected local-network communication error."""
+
+
+class ClimateGatewayUnavailable(ClimateGatewayError):
+    """The optional local Gree client is not installed."""
+
+
+class ClimateGateway:
+    """Expose local Gree Wi-Fi discovery and state reads to the HTTP layer."""
+
+    def __init__(self, default_target: str | None = None, scan_seconds: int = 2, state_timeout: float = 6.0) -> None:
+        self.default_target = self._validate_target(default_target) if default_target else None
+        self.scan_seconds = max(1, min(int(scan_seconds), 10))
+        self.state_timeout = max(1.0, min(float(state_timeout), 30.0))
+        self._lock = threading.Lock()
+        self._devices: dict[str, dict[str, Any]] = {}
+        self._last_scan_at: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return ClimateDiscovery is not None and ClimateDevice is not None and ClimateDeviceInfo is not None
+
+    def overview(self) -> dict[str, Any]:
+        with self._lock:
+            devices = list(self._devices.values())
+            last_scan_at = self._last_scan_at
+        return {
+            "available": self.available,
+            "configuredTarget": self.default_target,
+            "lastScanAt": last_scan_at,
+            "devices": devices,
+        }
+
+    def scan(self, target: str | None = None) -> dict[str, Any]:
+        self._ensure_available()
+        target = self._validate_target(target) if target else self.default_target
+        with self._lock:
+            try:
+                devices = asyncio.run(self._discover(target, self.scan_seconds))
+            except (OSError, asyncio.TimeoutError) as error:
+                raise ClimateGatewayError(f"A Gree felderítés sikertelen: {error}") from error
+            self._remember(devices)
+            self._last_scan_at = utc_now()
+            return {
+                "available": True,
+                "target": target,
+                "lastScanAt": self._last_scan_at,
+                "devices": [self._serialize_info(info) for info in devices],
+            }
+
+    def query(self, identifier: str | None = None) -> dict[str, Any]:
+        self._ensure_available()
+        with self._lock:
+            info = self._select_device(identifier)
+            try:
+                result = asyncio.run(self._query_device(info))
+            except (OSError, asyncio.TimeoutError) as error:
+                raise ClimateGatewayError(f"A klíma nem válaszolt: {error}") from error
+            except Exception as error:
+                timeout_types = tuple(
+                    item for item in (DeviceTimeoutError, DeviceNotBoundError) if isinstance(item, type)
+                )
+                if timeout_types and isinstance(error, timeout_types):
+                    raise ClimateGatewayError(
+                        "A klíma nem válaszolt. Ellenőrizd, hogy a Pi és a klíma azonos Wi-Fi hálózaton van-e."
+                    ) from error
+                raise
+            return result
+
+    def _ensure_available(self) -> None:
+        if not self.available:
+            raise ClimateGatewayUnavailable(
+                "A Gree Wi-Fi kliens nincs telepítve. Futtasd: pip install -r requirements.txt"
+            )
+
+    @staticmethod
+    def _validate_target(value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        try:
+            address = ipaddress.ip_address(text)
+        except ValueError as error:
+            raise ValueError("Érvénytelen IPv4-cím.") from error
+        if not isinstance(address, ipaddress.IPv4Address):
+            raise ValueError("A Gree helyi protokolljához IPv4-cím szükséges.")
+        if address.is_multicast or address.is_unspecified:
+            raise ValueError("Ez az IPv4-cím nem használható klímacímként.")
+        return str(address)
+
+    @staticmethod
+    def _device_key(mac: str) -> str:
+        return mac.replace(":", "").replace("-", "").replace(".", "").lower()
+
+    @staticmethod
+    def _serialize_info(info: Any) -> dict[str, Any]:
+        return {
+            "ip": str(info.ip),
+            "port": int(info.port),
+            "mac": str(info.mac),
+            "name": str(info.name or info.mac),
+            "brand": info.brand,
+            "model": info.model,
+            "version": info.version,
+            "mid": info.mid,
+        }
+
+    def _remember(self, devices: list[Any]) -> None:
+        for info in devices:
+            serialized = self._serialize_info(info)
+            self._devices[self._device_key(serialized["mac"])] = serialized
+
+    def _select_device(self, identifier: str | None) -> dict[str, Any]:
+        if identifier:
+            needle = identifier.strip().lower()
+            normalized = self._device_key(needle)
+            for key, info in self._devices.items():
+                if key == normalized or info["ip"].lower() == needle:
+                    return info
+            raise ValueError("A kért klíma nincs a felderített eszközök között. Indíts felderítést.")
+
+        if not self._devices and self.default_target:
+            devices = asyncio.run(self._discover(self.default_target, self.scan_seconds))
+            self._remember(devices)
+            self._last_scan_at = utc_now()
+        if not self._devices:
+            raise ValueError("Még nincs felderített klíma. Hívd meg előbb a /api/ac/scan végpontot.")
+        if len(self._devices) > 1:
+            raise ValueError("Több klíma található; add meg a device paramétert.")
+        return next(iter(self._devices.values()))
+
+    async def _discover(self, target: str | None, wait_for: int) -> list[Any]:
+        discovery = ClimateDiscovery(timeout=max(wait_for, 2))
+        try:
+            targets = [ipaddress.IPv4Address(target)] if target else None
+            return await discovery.scan(wait_for=wait_for, target_addresses=targets)
+        finally:
+            discovery.close()
+
+    async def _query_device(self, cached: dict[str, Any]) -> dict[str, Any]:
+        # Some modules require a fresh unicast discovery immediately before binding.
+        refreshed = await self._discover(cached["ip"], 1)
+        matching = next(
+            (
+                item
+                for item in refreshed
+                if self._device_key(str(item.mac)) == self._device_key(str(cached["mac"]))
+            ),
+            None,
+        )
+        if matching is not None:
+            info = matching
+            self._remember([matching])
+        else:
+            info = ClimateDeviceInfo(
+                cached["ip"], cached["port"], cached["mac"], cached["name"],
+                cached.get("brand"), cached.get("model"), cached.get("version"), cached.get("mid"),
+            )
+
+        device = ClimateDevice(info, timeout=int(self.state_timeout), bind_timeout=min(4, int(self.state_timeout)))
+        try:
+            await device.bind()
+            deadline = asyncio.get_running_loop().time() + self.state_timeout
+            while not device.has_valid_state and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+            if not device.has_valid_state:
+                await device.update_state()
+                retry_deadline = asyncio.get_running_loop().time() + self.state_timeout
+                while not device.has_valid_state and asyncio.get_running_loop().time() < retry_deadline:
+                    await asyncio.sleep(0.05)
+            if not device.has_valid_state:
+                raise asyncio.TimeoutError("az állapotlekérés időtúllépés miatt megszakadt")
+            return self._serialize_state(device, info)
+        finally:
+            device.close()
+
+    @staticmethod
+    def _enum_name(enum_type: Any, value: Any) -> str | None:
+        if value is None or enum_type is None:
+            return None
+        try:
+            return enum_type(value).name.lower()
+        except (TypeError, ValueError):
+            return "unknown"
+
+    def _serialize_state(self, device: Any, info: Any) -> dict[str, Any]:
+        unit_name = self._enum_name(TemperatureUnits, device.temperature_units)
+        return {
+            "device": self._serialize_info(info),
+            "updatedAt": utc_now(),
+            "firmware": device.version,
+            "state": {
+                "power": device.power,
+                "mode": {"value": device.mode, "name": self._enum_name(Mode, device.mode)},
+                "targetTemperature": device.target_temperature,
+                "currentTemperature": device.current_temperature,
+                "temperatureUnit": "°F" if unit_name == "f" else "°C",
+                "fanSpeed": {"value": device.fan_speed, "name": self._enum_name(FanSpeed, device.fan_speed)},
+                "horizontalSwing": {
+                    "value": device.horizontal_swing,
+                    "name": self._enum_name(HorizontalSwing, device.horizontal_swing),
+                },
+                "verticalSwing": {
+                    "value": device.vertical_swing,
+                    "name": self._enum_name(VerticalSwing, device.vertical_swing),
+                },
+                "quiet": device.quiet,
+                "turbo": device.turbo,
+                "sleep": device.sleep,
+                "light": device.light,
+                "xfan": device.xfan,
+                "anion": device.anion,
+                "currentHumidity": device.current_humidity,
+                "targetHumidity": device.target_humidity,
+                "cleanFilter": device.clean_filter,
+            },
+            "raw": dict(device.raw_properties),
+        }
+
+
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], monitor: SerialMonitor):
+    def __init__(
+        self,
+        address: tuple[str, int],
+        handler: type[BaseHTTPRequestHandler],
+        monitor: SerialMonitor,
+        climate: ClimateGateway | None = None,
+    ):
         super().__init__(address, handler)
         self.monitor = monitor
+        self.climate = climate or ClimateGateway()
 
     def handle_error(self, request: Any, client_address: tuple[str, int]) -> None:
         """Browser reloads commonly reset an SSE socket; that is not a server error."""
@@ -296,12 +553,32 @@ class AppHandler(BaseHTTPRequestHandler):
     def monitor(self) -> SerialMonitor:
         return self.server.monitor  # type: ignore[attr-defined,no-any-return]
 
+    @property
+    def climate(self) -> ClimateGateway:
+        return self.server.climate  # type: ignore[attr-defined,no-any-return]
+
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/api/status":
             self._send_json(self.monitor.status())
         elif path == "/api/ports":
             self._send_json({"ports": [port.as_dict() for port in self.monitor.available_ports()]})
+        elif path == "/api/ac/devices":
+            self._send_json(self.climate.overview())
+        elif path == "/api/ac/status":
+            try:
+                query = parse_qs(parsed.query)
+                identifier = query.get("device", [None])[0]
+                self._send_json(self.climate.query(identifier))
+            except ValueError as error:
+                self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            except ClimateGatewayUnavailable as error:
+                self._send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            except ClimateGatewayError as error:
+                self._send_json({"error": str(error)}, HTTPStatus.GATEWAY_TIMEOUT)
+            except Exception:
+                self._send_json({"error": "Váratlan szerverhiba."}, HTTPStatus.INTERNAL_SERVER_ERROR)
         elif path == "/api/stream":
             self._serve_event_stream()
         else:
@@ -320,8 +597,16 @@ class AppHandler(BaseHTTPRequestHandler):
             elif path == "/api/disconnect":
                 self._read_json(optional=True)
                 self._send_json(self.monitor.disconnect())
+            elif path == "/api/ac/scan":
+                body = self._read_json(optional=True)
+                target = str(body.get("target", "")).strip() or None
+                self._send_json(self.climate.scan(target))
             else:
                 self._send_json({"error": "Ismeretlen végpont."}, HTTPStatus.NOT_FOUND)
+        except ClimateGatewayUnavailable as error:
+            self._send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
+        except ClimateGatewayError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.GATEWAY_TIMEOUT)
         except (ValueError, RuntimeError) as error:
             self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception:
@@ -407,19 +692,21 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="USB soros adatok valós idejű webes megjelenítője")
+    parser = argparse.ArgumentParser(description="Gree klíma- és USB-adatok helyi webes megjelenítője")
     parser.add_argument("--host", default=os.environ.get("GREE_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("GREE_PORT", "8080")))
     parser.add_argument("--serial-port", default=os.environ.get("GREE_SERIAL_PORT"))
     parser.add_argument("--baudrate", type=int, default=int(os.environ.get("GREE_BAUDRATE", "115200")))
     parser.add_argument("--demo", action="store_true", default=os.environ.get("GREE_DEMO") == "1")
+    parser.add_argument("--ac-host", default=os.environ.get("GREE_AC_HOST"))
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     monitor = SerialMonitor()
-    httpd = AppServer((args.host, args.port), AppHandler, monitor)
+    climate = ClimateGateway(default_target=args.ac_host)
+    httpd = AppServer((args.host, args.port), AppHandler, monitor, climate)
 
     if args.demo:
         monitor.start_demo()
