@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0d1512" />
+    <meta name="description" content="USB soros adatok valós idejű Raspberry Pi monitorja" />
+    <title>Gree / USB Monitor</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="noise" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Gree USB Monitor kezdőlap">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <strong>GREE</strong>
+          <small>USB MONITOR</small>
+        </span>
+      </a>
+      <div class="topbar-meta">
+        <span class="pi-label">RASPBERRY PI</span>
+        <span class="connection-pill" id="connectionPill">
+          <i></i><span id="connectionLabel">Nincs kapcsolat</span>
+        </span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero panel-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">ÉLŐ ADATFOLYAM <span>01</span></p>
+          <h1>Lásd, mi érkezik<br /><em>a vezetéken.</em></h1>
+          <p class="intro">
+            Soros USB-adatok valós időben, közvetlenül a Raspberry Pi-ről.
+            Mérés, diagnosztika és nyers bájtok egyetlen tiszta felületen.
+          </p>
+        </div>
+
+        <aside class="connect-card" aria-labelledby="connectTitle">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">JELFORRÁS</p>
+              <h2 id="connectTitle">Kapcsolódás</h2>
+            </div>
+            <button class="icon-button" id="refreshPorts" title="Portlista frissítése" aria-label="Portlista frissítése">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+            </button>
+          </div>
+
+          <form id="connectionForm">
+            <label for="deviceSelect">Soros port</label>
+            <div class="select-wrap">
+              <select id="deviceSelect" name="device">
+                <option value="">Portok keresése…</option>
+              </select>
+            </div>
+
+            <label for="manualDevice">Egyedi eszközút <span>opcionális</span></label>
+            <input id="manualDevice" name="manualDevice" type="text" placeholder="/dev/ttyUSB0" autocomplete="off" />
+
+            <label for="baudrate">Baud rate</label>
+            <div class="select-wrap">
+              <select id="baudrate" name="baudrate">
+                <option>9600</option>
+                <option>19200</option>
+                <option>38400</option>
+                <option>57600</option>
+                <option selected>115200</option>
+                <option>230400</option>
+                <option>460800</option>
+                <option>921600</option>
+              </select>
+            </div>
+
+            <div class="button-row">
+              <button class="primary-button" type="submit" id="connectButton">
+                <span>Csatlakozás</span><span aria-hidden="true">↗</span>
+              </button>
+              <button class="secondary-button" type="button" id="demoButton">Próbaadat</button>
+            </div>
+          </form>
+          <button class="disconnect-button" type="button" id="disconnectButton" hidden>Kapcsolat bontása</button>
+          <p class="form-note" id="formNote">Válassz egy elérhető USB-soros eszközt.</p>
+        </aside>
+      </section>
+
+      <section class="metrics" aria-label="Adatfolyam statisztika">
+        <article class="metric">
+          <span class="metric-index">01</span>
+          <div><strong id="packetCount">0</strong><small>CSOMAG</small></div>
+        </article>
+        <article class="metric">
+          <span class="metric-index">02</span>
+          <div><strong id="byteCount">0 B</strong><small>FOGADOTT ADAT</small></div>
+        </article>
+        <article class="metric">
+          <span class="metric-index">03</span>
+          <div><strong id="dataRate">0 B/s</strong><small>AKTUÁLIS SEBESSÉG</small></div>
+        </article>
+        <article class="metric">
+          <span class="metric-index">04</span>
+          <div><strong id="lastSeen">—</strong><small>UTOLSÓ JEL</small></div>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <article class="chart-card dashboard-card">
+          <header class="section-heading">
+            <div>
+              <p class="eyebrow">TELEMETRIA <span>02</span></p>
+              <h2>Numerikus értékek</h2>
+            </div>
+            <span class="live-tag"><i></i> ÉLŐ</span>
+          </header>
+          <div class="chart-wrap">
+            <canvas id="signalChart" aria-label="Beérkező numerikus értékek grafikonja"></canvas>
+            <div class="empty-state" id="chartEmpty">
+              <span class="pulse-ring"><i></i></span>
+              <p>Várakozás numerikus adatra</p>
+              <small>JSON mezőket és egyszerű számokat automatikusan felismerünk.</small>
+            </div>
+          </div>
+          <div class="chart-legend" id="chartLegend"><small>Minden jel saját skálán</small></div>
+        </article>
+
+        <article class="stream-card dashboard-card">
+          <header class="section-heading stream-heading">
+            <div>
+              <p class="eyebrow">NYERS FOLYAM <span>03</span></p>
+              <h2>Beérkező adatok</h2>
+            </div>
+            <div class="stream-actions">
+              <div class="segmented" role="group" aria-label="Adatformátum">
+                <button type="button" class="active" data-format="text">TEXT</button>
+                <button type="button" data-format="hex">HEX</button>
+              </div>
+              <button class="small-button" id="pauseButton" type="button">Szünet</button>
+              <button class="small-button" id="clearButton" type="button">Törlés</button>
+              <button class="small-button" id="exportButton" type="button">Export</button>
+            </div>
+          </header>
+          <div class="terminal" id="terminal" aria-live="polite" aria-label="Nyers soros adatok">
+            <div class="terminal-placeholder" id="terminalPlaceholder">
+              <span>&gt;_</span>
+              <p>A beérkező bájtok itt jelennek meg.</p>
+            </div>
+          </div>
+          <footer class="terminal-footer">
+            <span><i class="status-dot"></i><span id="streamState">ADATFOLYAM KÉSZ</span></span>
+            <span>MAX. 500 BEJEGYZÉS</span>
+          </footer>
+        </article>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
