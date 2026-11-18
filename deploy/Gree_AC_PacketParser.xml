@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Templates format="2" protocolVersion="73">
-  <Template revision="1.1" id="f2f4b835-7238-48a7-b566-96cf79f31346">
+  <Template revision="1.2" id="f2f4b835-7238-48a7-b566-96cf79f31346">
     <SuggestedCCUParameters />
     <RevisionHistory>
       <Revision id="1.0">Initial semantic HTTP version</Revision>
       <Revision id="1.1">Use module variable for the imported climate profile name</Revision>
+      <Revision id="1.2">Reduce command latency with a faster default poll interval</Revision>
     </RevisionHistory>
     <Name>Gree AC - HTTP Packet Parser</Name>
     <CcuModel>PacketParserCCU</CcuModel>
@@ -24,7 +25,7 @@
       </Parameter>
       <Parameter>
         <Name>Lekerdezesi ido (ms)</Name>
-        <Value>5000</Value>
+        <Value>1000</Value>
         <Id>PollInterval</Id>
       </Parameter>
       <Parameter>

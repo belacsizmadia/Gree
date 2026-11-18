@@ -112,7 +112,7 @@ class TapHomeGateway:
             profiles = self.profiles.list() if self.profiles is not None else []
             return {
                 "template": "Gree AC - HTTP Packet Parser",
-                "templateRevision": "1.1",
+                "templateRevision": "1.2",
                 "transport": "HTTP/JSON",
                 "enabled": True,
                 "available": self.available,

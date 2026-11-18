@@ -465,25 +465,32 @@ class ClimateGateway:
             discovery.close()
 
     async def _connect_device(self, cached: dict[str, Any]) -> tuple[Any, Any]:
-        # Some modules require a fresh unicast discovery immediately before binding.
-        refreshed = await self._discover(cached["ip"], 1)
-        matching = next(
-            (
-                item
-                for item in refreshed
-                if self._device_key(str(item.mac)) == self._device_key(str(cached["mac"]))
-            ),
-            None,
+        # The device metadata obtained during the first scan is enough for most
+        # modules. Reusing it removes a roughly one-second discovery round-trip
+        # from every read and write. Modules that require a fresh discovery still
+        # get the previous behavior as an automatic fallback.
+        cached_info = ClimateDeviceInfo(
+            cached["ip"], cached["port"], cached["mac"], cached["name"],
+            cached.get("brand"), cached.get("model"), cached.get("version"), cached.get("mid"),
         )
-        if matching is not None:
-            info = matching
-            self._remember([matching])
-        else:
-            info = ClimateDeviceInfo(
-                cached["ip"], cached["port"], cached["mac"], cached["name"],
-                cached.get("brand"), cached.get("model"), cached.get("version"), cached.get("mid"),
+        try:
+            return await self._bind_device(cached_info)
+        except Exception as direct_error:
+            refreshed = await self._discover(cached["ip"], 1)
+            matching = next(
+                (
+                    item
+                    for item in refreshed
+                    if self._device_key(str(item.mac)) == self._device_key(str(cached["mac"]))
+                ),
+                None,
             )
+            if matching is None:
+                raise direct_error
+            self._remember([matching])
+            return await self._bind_device(matching)
 
+    async def _bind_device(self, info: Any) -> tuple[Any, Any]:
         device = ClimateDevice(info, timeout=int(self.state_timeout), bind_timeout=min(4, int(self.state_timeout)))
         try:
             await device.bind()

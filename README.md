@@ -87,6 +87,8 @@ TapHome beállítás:
 3. Importáld a letöltött `Gree_AC_PacketParser.xml` fájlt.
 4. Add meg a Raspberry Pi fix helyi IP-címét, a telepítéskor választott HTTP-portot és a webes felületen elmentett klímaprofil nevét.
 
+A sablon alapértelmezett lekérdezési ideje `1000 ms`. Gyors helyi hálózaton `500 ms` is megadható; ennél kisebb érték feleslegesen terhelheti a TapHome központot és a klímát.
+
 Az állapot lekérése:
 
 ```bash

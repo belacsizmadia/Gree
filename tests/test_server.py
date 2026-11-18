@@ -1,3 +1,4 @@
+import asyncio
 import http.client
 import json
 import queue
@@ -6,6 +7,7 @@ import threading
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from climate_profiles import ClimateProfileStore
 from server import AppHandler, AppServer, ClimateGateway, SerialMonitor, extract_numeric_values
@@ -131,6 +133,29 @@ class ClimateGatewayTests(unittest.TestCase):
     def test_rejects_invalid_target(self):
         with self.assertRaisesRegex(ValueError, "IPv4"):
             ClimateGateway._validate_target("gree.local")
+
+    def test_reuses_cached_device_info_without_discovery(self):
+        class FakeInfo:
+            def __init__(self, *values):
+                self.values = values
+
+        class FakeDevice:
+            def __init__(self, info, **_options):
+                self.info = info
+                self.has_valid_state = True
+
+            async def bind(self):
+                return None
+
+            def close(self):
+                return None
+
+        gateway = ClimateGateway()
+        gateway._discover = AsyncMock(side_effect=AssertionError("A gyors út nem indíthat felderítést."))
+        with patch("server.ClimateDeviceInfo", FakeInfo), patch("server.ClimateDevice", FakeDevice):
+            device, info = asyncio.run(gateway._connect_device(SAMPLE_DEVICE))
+        self.assertIs(device.info, info)
+        gateway._discover.assert_not_awaited()
 
 
 class ClimateProfileStoreTests(unittest.TestCase):
@@ -328,6 +353,13 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(content_type.startswith("application/xml"))
         root = ET.fromstring(payload)
         self.assertEqual(root.tag, "Templates")
+        self.assertEqual(root.find("Template").attrib["revision"], "1.2")
+        poll_parameter = next(
+            parameter
+            for parameter in root.findall(".//ImportParameters/Parameter")
+            if parameter.findtext("Id") == "PollInterval"
+        )
+        self.assertEqual(poll_parameter.findtext("Value"), "1000")
         self.assertIn(b"PacketParserThermostat", payload)
         self.assertIn(b'"/api/taphome/ac/" + ClimateName', payload)
         self.assertIn(b'"StringValue":"$[ClimateName]"', payload)
