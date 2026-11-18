@@ -1,18 +1,12 @@
 import http.client
 import json
 import queue
-import socket
 import threading
-import time
 import unittest
+import xml.etree.ElementTree as ET
 
 from server import AppHandler, AppServer, ClimateGateway, SerialMonitor, extract_numeric_values
 from taphome_gateway import TapHomeGateway
-
-try:
-    from pymodbus.client import ModbusTcpClient
-except ImportError:
-    ModbusTcpClient = None
 
 
 SAMPLE_DEVICE = {
@@ -31,6 +25,7 @@ class FakeClimateGateway:
     def __init__(self):
         self.devices = []
         self.changes = []
+        self.query_count = 0
         self.state = {
             "power": True,
             "mode": {"value": 1, "name": "cool"},
@@ -40,9 +35,15 @@ class FakeClimateGateway:
             "fanSpeed": {"value": 3, "name": "medium"},
             "horizontalSwing": {"value": 1, "name": "fullswing"},
             "verticalSwing": {"value": 1, "name": "fullswing"},
+            "freshAir": False,
+            "quiet": False,
             "turbo": False,
             "sleep": False,
             "light": True,
+            "xfan": False,
+            "anion": False,
+            "currentHumidity": 48,
+            "targetHumidity": None,
             "cleanFilter": False,
         }
 
@@ -56,6 +57,7 @@ class FakeClimateGateway:
     def query(self, identifier=None):
         if identifier != SAMPLE_DEVICE["mac"]:
             raise ValueError("Ismeretlen klíma")
+        self.query_count += 1
         return {
             "device": SAMPLE_DEVICE,
             "updatedAt": "2026-11-18T10:00:01Z",
@@ -134,68 +136,46 @@ class TapHomeGatewayTests(unittest.TestCase):
         self.climate.devices = [SAMPLE_DEVICE]
         self.gateway = TapHomeGateway(self.climate, device_identifier=SAMPLE_DEVICE["mac"])
 
-    def test_maps_gree_state_to_official_template_registers(self):
-        status = self.gateway.sync_now()
-        registers = status["holdingRegisters"]
-        self.assertEqual(registers["2"], 170)
-        self.assertEqual(registers["4"], 235)
-        self.assertEqual(registers["17"], 1)
-        self.assertEqual(registers["19"], 3)
-        self.assertEqual(registers["20"], 21)
+    def test_exposes_semantic_values_without_modbus_registers(self):
+        state = self.gateway.read()
+        self.assertTrue(state["power"])
+        self.assertEqual(state["mode"], "cool")
+        self.assertEqual(state["currentTemperature"], 23.5)
+        self.assertEqual(state["fanSpeed"], "medium")
+        self.assertNotIn("holdingRegisters", state)
 
-    def test_translates_template_write_to_gree_control(self):
-        status = self.gateway.apply_register_write(20, 24)
+    def test_translates_semantic_write_to_gree_control(self):
+        state = self.gateway.control({"targetTemperature": 24})
         self.assertEqual(self.climate.changes[-1], {"targetTemperature": 24})
-        self.assertEqual(status["holdingRegisters"]["20"], 24)
+        self.assertEqual(state["targetTemperature"], 24)
 
-    def test_normalizes_fahrenheit_state_to_template_celsius(self):
+    def test_normalizes_fahrenheit_for_taphome_thermostat(self):
         self.climate.state["temperatureUnit"] = "°F"
         self.climate.state["currentTemperature"] = 74.3
         self.climate.state["targetTemperature"] = 69.8
-        registers = self.gateway.sync_now()["holdingRegisters"]
-        self.assertEqual(registers["4"], 235)
-        self.assertEqual(registers["20"], 21)
+        state = self.gateway.read()
+        self.assertEqual(state["temperatureUnit"], "C")
+        self.assertEqual(state["currentTemperature"], 23.5)
+        self.assertEqual(state["targetTemperature"], 21.0)
 
-    def test_rejects_read_only_register_write(self):
-        with self.assertRaisesRegex(ValueError, "nem írható"):
-            self.gateway.apply_register_write(4, 220)
-
-    @unittest.skipIf(ModbusTcpClient is None, "pymodbus nincs telepítve")
-    def test_serves_and_accepts_official_modbus_registers(self):
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-        gateway = TapHomeGateway(
-            self.climate,
-            enabled=True,
-            host="127.0.0.1",
-            port=port,
-            slave_id=1,
-            device_identifier=SAMPLE_DEVICE["mac"],
-            poll_interval=60,
+    def test_translates_named_packet_parser_values(self):
+        state = self.gateway.control(
+            {"mode": "heat", "fanSpeed": "mediumHigh", "verticalSwing": "fixedMiddle"}
         )
-        client = ModbusTcpClient("127.0.0.1", port=port, timeout=2)
-        try:
-            gateway.start()
-            deadline = time.monotonic() + 3
-            while time.monotonic() < deadline and not (
-                gateway.status()["running"] and gateway.status()["connected"]
-            ):
-                time.sleep(0.05)
-            self.assertTrue(client.connect())
-            response = client.read_holding_registers(2, count=1, device_id=1)
-            self.assertFalse(response.isError())
-            self.assertEqual(response.registers, [170])
+        self.assertEqual(
+            self.climate.changes[-1],
+            {"mode": 4, "fanSpeed": 4, "verticalSwing": 4},
+        )
+        self.assertEqual(state["targetTemperature"], 21)
 
-            response = client.write_register(20, 24, device_id=1)
-            self.assertFalse(response.isError())
-            deadline = time.monotonic() + 3
-            while time.monotonic() < deadline and {"targetTemperature": 24} not in self.climate.changes:
-                time.sleep(0.05)
-            self.assertIn({"targetTemperature": 24}, self.climate.changes)
-        finally:
-            client.close()
-            gateway.stop()
+    def test_rejects_raw_register_payload(self):
+        with self.assertRaisesRegex(ValueError, "Nem támogatott TapHome mező"):
+            self.gateway.control({"register": 20, "value": 22})
+
+    def test_caches_repeated_packet_parser_reads(self):
+        self.gateway.read()
+        self.gateway.read()
+        self.assertEqual(self.climate.query_count, 1)
 
 
 class ApiTests(unittest.TestCase):
@@ -257,17 +237,36 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response["state"]["currentTemperature"], 23.5)
 
     def test_taphome_gree_ac_http_gateway(self):
-        status, _, payload = self.request("POST", "/api/taphome/sync", "{}")
+        status, _, payload = self.request("GET", "/api/taphome/ac")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(payload)["holdingRegisters"]["4"], 235)
+        response = json.loads(payload)
+        self.assertEqual(response["currentTemperature"], 23.5)
+        self.assertEqual(response["mode"], "cool")
+        self.assertNotIn("holdingRegisters", response)
 
         status, _, payload = self.request(
-            "POST", "/api/taphome/gree-ac", '{"register":2,"value":85}'
+            "POST", "/api/taphome/ac", '{"power":false,"mode":"heat"}'
         )
         self.assertEqual(status, 200)
         response = json.loads(payload)
-        self.assertEqual(response["holdingRegisters"]["2"], 85)
-        self.assertEqual(self.climate.changes[-1], {"power": False})
+        self.assertFalse(response["power"])
+        self.assertEqual(self.climate.changes[-1], {"power": False, "mode": 4})
+
+    def test_taphome_rejects_modbus_register_payload(self):
+        status, _, payload = self.request(
+            "POST", "/api/taphome/ac", '{"register":20,"value":22}'
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("Nem támogatott TapHome mező", json.loads(payload)["error"])
+
+    def test_serves_valid_packet_parser_template(self):
+        status, content_type, payload = self.request("GET", "/api/taphome/template.xml")
+        self.assertEqual(status, 200)
+        self.assertTrue(content_type.startswith("application/xml"))
+        root = ET.fromstring(payload)
+        self.assertEqual(root.tag, "Templates")
+        self.assertIn(b"PacketParserThermostat", payload)
+        self.assertIn(b"/api/taphome/ac", payload)
 
 
 if __name__ == "__main__":

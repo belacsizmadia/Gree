@@ -7,7 +7,7 @@ Raspberry Pi-n futó, helyi hálózatról elérhető webes alkalmazás Gree Wi-F
 - Gree Wi-Fi klímák automatikus vagy célzott helyi felderítése;
 - bekapcsolt állapot, üzemmód, szoba- és célhőmérséklet, ventilátor és kiegészítő állapotok lekérése;
 - egyszerű HTTP/JSON API a klímaadatokhoz;
-- kétirányú TapHome gateway a hivatalos `Gree_AC` Modbus TCP sablonhoz;
+- kétirányú, szemantikus HTTP/JSON gateway és importálható TapHome Packet Parser sablon;
 - automatikus `/dev/ttyUSB*` és `/dev/ttyACM*` portfelismerés;
 - élő adatátvitel a böngészőbe Server-Sent Events kapcsolaton;
 - szöveges és HEX nyersadat-nézet;
@@ -63,42 +63,48 @@ curl 'http://raspberry-pi:8090/api/ac/status?device=AABBCC112233'
 
 Ha pontosan egy klíma van felderítve, a `device` paraméter elhagyható.
 
-## TapHome Gree_AC gateway
+## TapHome Packet Parser gateway
 
-A TapHome hivatalos [`Gree_AC` sablonja](https://taphome.com/en/compatibility/gree-ac/) nem HTTP/JSON, hanem Modbus TCP holding-regisztereket használ. Az alkalmazás ezért Modbus TCP szerverként is fut: a klíma helyi Wi-Fi állapotát a sablon regisztereire fordítja, a TapHome-ból érkező írásokat pedig visszaküldi a klímának.
+A gateway nem ad ki Modbus-regisztercímeket vagy kódolt regiszterértékeket. A klíma állapota lapos, névvel ellátott JSON-mezőként olvasható, a vezérelhető mezők pedig ugyanezen a néven írhatók. A mellékelt TapHome Packet Parser sablon ezeket natív kapcsolóként, termosztátként és többértékű választókként jeleníti meg.
 
 TapHome beállítás:
 
-1. Nyisd meg: **Hardware → Modbus → Add from template**.
-2. Válaszd a **Gree_AC** sablont.
-3. IP-címnek add meg a Raspberry Pi fix helyi címét.
-4. Slave ID: `1`.
-5. A szabványos Modbus TCP port `502`; ezt használja alapértelmezetten a telepítő.
+1. Töltsd le a sablont: `http://RASPBERRY-PI-IP:8090/api/taphome/template.xml`.
+2. A TapHome-ban nyisd meg: **Hardware → Packet Parser → Add from file**.
+3. Importáld a letöltött `Gree_AC_PacketParser.xml` fájlt.
+4. Add meg a Raspberry Pi fix helyi IP-címét és a telepítéskor választott HTTP-portot.
 
-A megvalósított regiszterek:
-
-| Regiszter | TapHome funkció | Irány |
-| --- | --- | --- |
-| `H:2` | Be-/kikapcsolás (`170`/`85`) | olvasás/írás |
-| `H:4` | Szobahőmérséklet ×10 | olvasás |
-| `H:17` | Üzemmód | olvasás/írás |
-| `H:19` | Ventilátor 0–6 | olvasás/írás |
-| `H:20` | Célhőmérséklet 16–30 °C | olvasás/írás |
-| `H:22` | Függőleges légterelő | olvasás/írás |
-| `H:23` | Vízszintes légterelő | olvasás/írás |
-| `H:5,24,25,34,39,49,77,82,83` | A sablon diagnosztikai értékei | olvasás |
-
-A TapHome-formátum HTTP-n is lekérdezhető és tesztelhető:
+Az állapot lekérése:
 
 ```bash
-curl http://raspberry-pi:8090/api/taphome/gree-ac
-curl -X POST http://raspberry-pi:8090/api/taphome/sync -H 'Content-Type: application/json' -d '{}'
-curl -X POST http://raspberry-pi:8090/api/taphome/gree-ac \
-  -H 'Content-Type: application/json' \
-  -d '{"register":20,"value":22}'
+curl http://raspberry-pi:8090/api/taphome/ac
 ```
 
-A GET-válasz tartalmazza a `holdingRegisters` objektumot, amelynek kulcsai pontosan a `Gree_AC` sablon holding-regiszterei. A Modbus TCP felület hitelesítés nélküli ipari protokoll, ezért csak megbízható helyi hálózaton tedd elérhetővé.
+Példaválasz:
+
+```json
+{
+  "power": true,
+  "mode": "cool",
+  "currentTemperature": 23.5,
+  "targetTemperature": 22,
+  "fanSpeed": "medium",
+  "verticalSwing": "fullswing",
+  "horizontalSwing": "center",
+  "sleep": false,
+  "quiet": false
+}
+```
+
+Egy vagy több beállítás módosítása ugyanazon a végponton történik:
+
+```bash
+curl -X POST http://raspberry-pi:8090/api/taphome/ac \
+  -H 'Content-Type: application/json' \
+  -d '{"power":true,"mode":"cool","targetTemperature":22}'
+```
+
+Olvasható: be-/kikapcsolás, üzemmód, aktuális és célhőmérséklet, ventilátor, függőleges és vízszintes légterelő, páratartalom, frisslevegő-, csendes-, turbó-, alvás-, fény-, X-Fan-, ionizátor- és szűrőállapot. A szűrő és a mért értékek csak olvashatók; a többi felsorolt vezérlés az adott klímamodell támogatásától függően írható.
 
 ## Telepítő Raspberry Pi-re
 
@@ -116,14 +122,6 @@ Automatizált telepítés megadott porttal:
 ```bash
 sudo ./install.sh --port 8090
 ```
-
-Eltérő Modbus TCP porttal:
-
-```bash
-sudo ./install.sh --port 8090 --taphome-port 1502
-```
-
-A hivatalos `Gree_AC` sablonhoz az `502` port ajánlott. Az alacsony porthoz szükséges `CAP_NET_BIND_SERVICE` jogosultságot a systemd egység korlátozottan megkapja; az alkalmazás ettől még nem fut rootként.
 
 Másik Linux-felhasználó megadása:
 
@@ -155,7 +153,7 @@ sudo usermod -aG dialout "$USER"
 
 ## Beállítások
 
-A parancssori kapcsolók helyett környezeti változók is használhatók. A minta az [`.env.example`](.env.example) fájlban található.
+A parancssori kapcsolók helyett környezeti változók is használhatók. A telepítő ezeket az `/opt/gree-usb-monitor/.env` fájlba írja.
 
 | Változó | Alapérték | Leírás |
 | --- | --- | --- |
@@ -164,12 +162,8 @@ A parancssori kapcsolók helyett környezeti változók is használhatók. A min
 | `GREE_SERIAL_PORT` | — | Automatikusan megnyitandó eszköz |
 | `GREE_BAUDRATE` | `115200` | Soros sebesség |
 | `GREE_AC_HOST` | — | Klíma fix helyi IPv4-címe a célzott felderítéshez |
-| `GREE_TAPHOME_ENABLED` | `0` | `1` esetén elindul a Modbus TCP gateway; a telepítő bekapcsolja |
-| `GREE_TAPHOME_HOST` | `0.0.0.0` | Modbus TCP figyelési cím |
-| `GREE_TAPHOME_PORT` | `502` | TapHome Modbus TCP port |
-| `GREE_TAPHOME_SLAVE_ID` | `1` | A `Gree_AC` sablon Slave ID-ja |
 | `GREE_TAPHOME_DEVICE` | — | Klíma MAC- vagy IPv4-címe, ha több eszköz van |
-| `GREE_TAPHOME_POLL_INTERVAL` | `5` | Klíma szinkronizálási ideje másodpercben |
+| `GREE_TAPHOME_CACHE_SECONDS` | `1` | A Packet Parser lekérések között megosztott klímaállapot gyorsítótára |
 | `GREE_DEMO` | `0` | `1` esetén próbaadat indul |
 | `GREE_QUIET` | `0` | `1` esetén nincs HTTP access log |
 

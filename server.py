@@ -65,6 +65,7 @@ except ImportError:  # The USB monitor remains usable if the Wi-Fi client is not
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
+TAPHOME_TEMPLATE_PATH = APP_DIR / "deploy" / "Gree_AC_PacketParser.xml"
 NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 SUPPORTED_BAUDRATES = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600}
 
@@ -526,6 +527,7 @@ class ClimateGateway:
                     "vertical_swing",
                     lambda value: self._bounded_int(value, 0, 11, "függőleges légterelő"),
                 ),
+                "freshAir": ("fresh_air", lambda value: bool(value)),
                 "quiet": ("quiet", lambda value: bool(value)),
                 "turbo": ("turbo", lambda value: bool(value)),
                 "sleep": ("sleep", lambda value: bool(value)),
@@ -654,8 +656,21 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json({"ports": [port.as_dict() for port in self.monitor.available_ports()]})
         elif path == "/api/ac/devices":
             self._send_json(self.climate.overview())
-        elif path in ("/api/taphome/status", "/api/taphome/gree-ac"):
+        elif path == "/api/taphome/status":
             self._send_json(self.taphome.status())
+        elif path in ("/api/taphome/ac", "/api/taphome/gree-ac"):
+            try:
+                self._send_json(self.taphome.read())
+            except ValueError as error:
+                self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            except ClimateGatewayUnavailable as error:
+                self._send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            except ClimateGatewayError as error:
+                self._send_json({"error": str(error)}, HTTPStatus.GATEWAY_TIMEOUT)
+            except Exception:
+                self._send_json({"error": "Váratlan szerverhiba."}, HTTPStatus.INTERNAL_SERVER_ERROR)
+        elif path == "/api/taphome/template.xml":
+            self._serve_file(TAPHOME_TEMPLATE_PATH, "application/xml; charset=utf-8", download=True)
         elif path == "/api/ac/status":
             try:
                 query = parse_qs(parsed.query)
@@ -694,11 +709,9 @@ class AppHandler(BaseHTTPRequestHandler):
             elif path == "/api/taphome/sync":
                 self._read_json(optional=True)
                 self._send_json(self.taphome.sync_now())
-            elif path == "/api/taphome/gree-ac":
+            elif path in ("/api/taphome/ac", "/api/taphome/gree-ac"):
                 body = self._read_json()
-                if "register" not in body or "value" not in body:
-                    raise ValueError("A register és value mező megadása kötelező.")
-                self._send_json(self.taphome.apply_register_write(int(body["register"]), int(body["value"])))
+                self._send_json(self.taphome.control(body))
             else:
                 self._send_json({"error": "Ismeretlen végpont."}, HTTPStatus.NOT_FOUND)
         except ClimateGatewayUnavailable as error:
@@ -775,12 +788,20 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
 
-        content = requested.read_bytes()
         mime_type = mimetypes.guess_type(requested.name)[0] or "application/octet-stream"
+        self._serve_file(requested, f"{mime_type}; charset=utf-8" if mime_type.startswith("text/") else mime_type)
+
+    def _serve_file(self, path: Path, content_type: str, *, download: bool = False) -> None:
+        if not path.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        content = path.read_bytes()
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", f"{mime_type}; charset=utf-8" if mime_type.startswith("text/") else mime_type)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-cache")
+        if download:
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
         self.end_headers()
         self.wfile.write(content)
 
@@ -797,15 +818,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baudrate", type=int, default=int(os.environ.get("GREE_BAUDRATE", "115200")))
     parser.add_argument("--demo", action="store_true", default=os.environ.get("GREE_DEMO") == "1")
     parser.add_argument("--ac-host", default=os.environ.get("GREE_AC_HOST"))
-    parser.add_argument("--taphome", action="store_true", default=os.environ.get("GREE_TAPHOME_ENABLED") == "1")
-    parser.add_argument("--taphome-host", default=os.environ.get("GREE_TAPHOME_HOST", "0.0.0.0"))
-    parser.add_argument("--taphome-port", type=int, default=int(os.environ.get("GREE_TAPHOME_PORT", "502")))
-    parser.add_argument(
-        "--taphome-slave-id", type=int, default=int(os.environ.get("GREE_TAPHOME_SLAVE_ID", "1"))
-    )
     parser.add_argument("--taphome-device", default=os.environ.get("GREE_TAPHOME_DEVICE"))
     parser.add_argument(
-        "--taphome-poll", type=float, default=float(os.environ.get("GREE_TAPHOME_POLL_INTERVAL", "5"))
+        "--taphome-cache", type=float, default=float(os.environ.get("GREE_TAPHOME_CACHE_SECONDS", "1"))
     )
     return parser.parse_args()
 
@@ -816,12 +831,8 @@ def main() -> None:
     climate = ClimateGateway(default_target=args.ac_host)
     taphome = TapHomeGateway(
         climate,
-        enabled=args.taphome,
-        host=args.taphome_host,
-        port=args.taphome_port,
-        slave_id=args.taphome_slave_id,
         device_identifier=args.taphome_device,
-        poll_interval=args.taphome_poll,
+        cache_seconds=args.taphome_cache,
     )
     httpd = AppServer((args.host, args.port), AppHandler, monitor, climate, taphome)
 
@@ -832,8 +843,6 @@ def main() -> None:
             monitor.connect(args.serial_port, args.baudrate)
         except (ValueError, RuntimeError) as error:
             print(f"Automatikus csatlakozás sikertelen: {error}")
-
-    taphome.start()
 
     stop_once = threading.Event()
 
@@ -849,7 +858,6 @@ def main() -> None:
     try:
         httpd.serve_forever(poll_interval=0.25)
     finally:
-        taphome.stop()
         monitor.disconnect()
         httpd.server_close()
 

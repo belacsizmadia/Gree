@@ -146,13 +146,13 @@ async function loadTapHomeStatus() {
   try {
     const gateway = await api("/api/taphome/status");
     elements.tapHomeDot.classList.toggle("online", gateway.running && gateway.connected);
-    elements.tapHomeDot.classList.toggle("error", Boolean(gateway.error));
-    elements.tapHomeEndpoint.textContent = `MODBUS TCP ${gateway.host}:${gateway.port} · ID ${gateway.slaveId}`;
-    if (!gateway.enabled) elements.tapHomeStatus.textContent = "Kikapcsolva — GREE_TAPHOME_ENABLED=1 szükséges";
+    elements.tapHomeDot.classList.toggle("error", Boolean(gateway.error) || !gateway.available);
+    elements.tapHomeEndpoint.textContent = `HTTP ${gateway.endpoint}`;
+    if (!gateway.available) elements.tapHomeStatus.textContent = "A Gree Wi-Fi kliens nincs telepítve";
     else if (gateway.error) elements.tapHomeStatus.textContent = gateway.error;
-    else if (gateway.connected) elements.tapHomeStatus.textContent = `Klíma szinkronizálva · ${gateway.lastSyncAt ? new Date(gateway.lastSyncAt).toLocaleTimeString("hu-HU", { hour12: false }) : "—"}`;
-    else if (gateway.running) elements.tapHomeStatus.textContent = "Modbus szerver fut, klímaválaszra vár";
-    else elements.tapHomeStatus.textContent = "Gateway indításra vár";
+    else if (gateway.connected) elements.tapHomeStatus.textContent = `Klímaadat elérhető · ${gateway.lastReadAt ? new Date(gateway.lastReadAt).toLocaleTimeString("hu-HU", { hour12: false }) : "—"}`;
+    else if (gateway.running) elements.tapHomeStatus.textContent = "Packet Parser API kész, első lekérésre vár";
+    else elements.tapHomeStatus.textContent = "HTTP gateway indításra vár";
   } catch (error) {
     elements.tapHomeDot.classList.add("error");
     elements.tapHomeStatus.textContent = error.message;

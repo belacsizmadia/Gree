@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Templates format="2" protocolVersion="73">
+  <Template revision="1.0" id="f2f4b835-7238-48a7-b566-96cf79f31346">
+    <SuggestedCCUParameters />
+    <RevisionHistory>
+      <Revision id="1.0">Initial semantic HTTP version</Revision>
+    </RevisionHistory>
+    <Name>Gree AC - HTTP Packet Parser</Name>
+    <CcuModel>PacketParserCCU</CcuModel>
+    <Producer>Gree</Producer>
+    <Model>Local Wi-Fi AC</Model>
+    <Description>Gree klima vezerlese a Raspberry Pi szemantikus HTTP API-jan keresztul.</Description>
+    <ImportParameters>
+      <Parameter>
+        <Name>Raspberry Pi IP-cime</Name>
+        <Value>192.168.1.42</Value>
+        <Id>IpAddress</Id>
+      </Parameter>
+      <Parameter>
+        <Name>HTTP-port</Name>
+        <Value>8090</Value>
+        <Id>Port</Id>
+      </Parameter>
+      <Parameter>
+        <Name>Lekerdezesi ido (ms)</Name>
+        <Value>5000</Value>
+        <Id>PollInterval</Id>
+      </Parameter>
+    </ImportParameters>
+    <Module>
+      <Name>Gree AC HTTP gateway</Name>
+      <Id>-1</Id>
+      <Model>PacketParserModuleHttp</Model>
+      <DeviceProperties>
+        <ReadScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "GET", "");
+IF response.IsSuccess
+  acState := response.Content;
+ELSE
+  ADDERROR("Gree HTTP API hiba: " + response.StatusCode);
+END</ReadScriptPacketParser>
+        <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+        <CustomVariables>[{"Name":"acState","ValueTypeId":2,"NumericValue":0,"StringValue":""}]</CustomVariables>
+        <ServiceAttributesScriptsPacketParser>[]</ServiceAttributesScriptsPacketParser>
+        <ServiceActionsScriptsPacketParser>[]</ServiceActionsScriptsPacketParser>
+        <IpAddress>$[IpAddress]</IpAddress>
+        <Port>$[Port]</Port>
+        <UseHttps>False</UseHttps>
+      </DeviceProperties>
+      <Devices>
+        <Device>
+          <Name>Gree - Be / ki</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-2</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState>
+            <OnStateIconId>60</OnStateIconId>
+            <OffStateIconId>61</OffStateIconId>
+            <OnStateName>${general_on}</OnStateName>
+            <OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "power"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"power\":" + IF(St, "true", "false") + "}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Termosztat</Name>
+          <Model>PacketParserThermostat</Model>
+          <Id>-3</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <MinTemperature>16</MinTemperature>
+            <MaxTemperature>30</MaxTemperature>
+            <ReadCurrentTemperatureScriptPacketParser>PARSEJSON(acState, "currentTemperature")</ReadCurrentTemperatureScriptPacketParser>
+            <ReadTemperatureSetPointScriptPacketParser>PARSEJSON(acState, "targetTemperature")</ReadTemperatureSetPointScriptPacketParser>
+            <ReadHumidityScriptPacketParser>VAR humidity := PARSEJSON(acState, "currentHumidity");
+IF(ISNULL(humidity), NaN, humidity / 100.0)</ReadHumidityScriptPacketParser>
+            <WriteTemperatureSetPointScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"targetTemperature\":" + Se + "}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteTemperatureSetPointScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Uzemmod</Name>
+          <Model>PacketParserMultiValueSwitch</Model>
+          <Id>-4</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <Value0Index>0</Value0Index><Value1Index>1</Value1Index><Value2Index>2</Value2Index><Value3Index>3</Value3Index><Value4Index>4</Value4Index><Value5Index>69</Value5Index><Value6Index>70</Value6Index><Value7Index>71</Value7Index><Value8Index>72</Value8Index><Value9Index>73</Value9Index>
+            <Value0Name>AUTO</Value0Name><Value1Name>HUTES</Value1Name><Value2Name>SZARITAS</Value2Name><Value3Name>VENTILATOR</Value3Name><Value4Name>FUTES</Value4Name><Value5Name>5</Value5Name><Value6Name>6</Value6Name><Value7Name>7</Value7Name><Value8Name>8</Value8Name><Value9Name>9</Value9Name>
+            <Value0IconId>113</Value0IconId><Value1IconId>2</Value1IconId><Value2IconId>123</Value2IconId><Value3IconId>28</Value3IconId><Value4IconId>32</Value4IconId><Value5IconId>10</Value5IconId><Value6IconId>11</Value6IconId><Value7IconId>12</Value7IconId><Value8IconId>13</Value8IconId><Value9IconId>14</Value9IconId>
+            <OffStateValue>-1</OffStateValue>
+            <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "mode"), "auto", 0, "cool", 1, "dry", 2, "fan", 3, "heat", 4, NaN)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "auto", 1, "cool", 2, "dry", 3, "fan", 4, "heat", "");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"mode\":\"" + value + "\"}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Ventilator</Name>
+          <Model>PacketParserMultiValueSwitch</Model>
+          <Id>-5</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <Value0Index>0</Value0Index><Value1Index>1</Value1Index><Value2Index>2</Value2Index><Value3Index>3</Value3Index><Value4Index>4</Value4Index><Value5Index>5</Value5Index><Value6Index>6</Value6Index><Value7Index>71</Value7Index><Value8Index>72</Value8Index><Value9Index>73</Value9Index>
+            <Value0Name>AUTO</Value0Name><Value1Name>ALACSONY</Value1Name><Value2Name>KOZEP-ALACSONY</Value2Name><Value3Name>KOZEPES</Value3Name><Value4Name>KOZEP-MAGAS</Value4Name><Value5Name>MAGAS</Value5Name><Value6Name>TURBO</Value6Name><Value7Name>7</Value7Name><Value8Name>8</Value8Name><Value9Name>9</Value9Name>
+            <Value0IconId>113</Value0IconId><Value1IconId>25</Value1IconId><Value2IconId>25</Value2IconId><Value3IconId>26</Value3IconId><Value4IconId>27</Value4IconId><Value5IconId>27</Value5IconId><Value6IconId>28</Value6IconId><Value7IconId>12</Value7IconId><Value8IconId>13</Value8IconId><Value9IconId>14</Value9IconId>
+            <OffStateValue>-1</OffStateValue>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "turbo"), 6, SWITCH(PARSEJSON(acState, "fanSpeed"), "auto", 0, "low", 1, "mediumlow", 2, "medium", 3, "mediumhigh", 4, "high", 5, NaN))</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "auto", 1, "low", 2, "mediumlow", 3, "medium", 4, "mediumhigh", 5, "high", 6, "high", "");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"fanSpeed\":\"" + value + "\",\"turbo\":" + IF(Mu = 6, "true", "false") + "}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Vizszintes legterelo</Name>
+          <Model>PacketParserMultiValueSwitch</Model>
+          <Id>-6</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <Value0Index>0</Value0Index><Value1Index>1</Value1Index><Value2Index>2</Value2Index><Value3Index>3</Value3Index><Value4Index>4</Value4Index><Value5Index>5</Value5Index><Value6Index>6</Value6Index><Value7Index>71</Value7Index><Value8Index>72</Value8Index><Value9Index>73</Value9Index>
+            <Value0Name>ALAP</Value0Name><Value1Name>MOZGAS</Value1Name><Value2Name>BAL</Value2Name><Value3Name>BAL-KOZEP</Value3Name><Value4Name>KOZEP</Value4Name><Value5Name>JOBB-KOZEP</Value5Name><Value6Name>JOBB</Value6Name><Value7Name>7</Value7Name><Value8Name>8</Value8Name><Value9Name>9</Value9Name>
+            <Value0IconId>134</Value0IconId><Value1IconId>138</Value1IconId><Value2IconId>131</Value2IconId><Value3IconId>132</Value3IconId><Value4IconId>134</Value4IconId><Value5IconId>136</Value5IconId><Value6IconId>137</Value6IconId><Value7IconId>12</Value7IconId><Value8IconId>13</Value8IconId><Value9IconId>14</Value9IconId>
+            <OffStateValue>-1</OffStateValue>
+            <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "horizontalSwing"), "default", 0, "fullswing", 1, "left", 2, "leftcenter", 3, "center", 4, "rightcenter", 5, "right", 6, NaN)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "default", 1, "fullswing", 2, "left", 3, "leftcenter", 4, "center", 5, "rightcenter", 6, "right", "");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"horizontalSwing\":\"" + value + "\"}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Fuggoleges fix pozicio</Name>
+          <Model>PacketParserMultiValueSwitch</Model>
+          <Id>-7</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <Value0Index>0</Value0Index><Value1Index>1</Value1Index><Value2Index>2</Value2Index><Value3Index>3</Value3Index><Value4Index>4</Value4Index><Value5Index>5</Value5Index><Value6Index>6</Value6Index><Value7Index>71</Value7Index><Value8Index>72</Value8Index><Value9Index>73</Value9Index>
+            <Value0Name>ALAP</Value0Name><Value1Name>TELJES MOZGAS</Value1Name><Value2Name>FELSO</Value2Name><Value3Name>FELSO-KOZEP</Value3Name><Value4Name>KOZEP</Value4Name><Value5Name>ALSO-KOZEP</Value5Name><Value6Name>ALSO</Value6Name><Value7Name>7</Value7Name><Value8Name>8</Value8Name><Value9Name>9</Value9Name>
+            <Value0IconId>134</Value0IconId><Value1IconId>140</Value1IconId><Value2IconId>131</Value2IconId><Value3IconId>132</Value3IconId><Value4IconId>134</Value4IconId><Value5IconId>136</Value5IconId><Value6IconId>137</Value6IconId><Value7IconId>12</Value7IconId><Value8IconId>13</Value8IconId><Value9IconId>14</Value9IconId>
+            <OffStateValue>-1</OffStateValue>
+            <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "verticalSwing"), "default", 0, "fullswing", 1, "fixedupper", 2, "fixeduppermiddle", 3, "fixedmiddle", 4, "fixedlowermiddle", 5, "fixedlower", 6, NaN)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "default", 1, "fullswing", 2, "fixedupper", 3, "fixeduppermiddle", 4, "fixedmiddle", 5, "fixedlowermiddle", 6, "fixedlower", "");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"verticalSwing\":\"" + value + "\"}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Fuggoleges mozgas tartomany</Name>
+          <Model>PacketParserMultiValueSwitch</Model>
+          <Id>-8</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser />
+            <InternalPollInterval>$[PollInterval]</InternalPollInterval>
+            <CustomVariables />
+            <ServiceAttributesScriptsPacketParser />
+            <ServiceActionsScriptsPacketParser />
+            <ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <Value0Index>0</Value0Index><Value1Index>1</Value1Index><Value2Index>2</Value2Index><Value3Index>3</Value3Index><Value4Index>4</Value4Index><Value5Index>5</Value5Index><Value6Index>6</Value6Index><Value7Index>71</Value7Index><Value8Index>72</Value8Index><Value9Index>73</Value9Index>
+            <Value0Name>ALAP</Value0Name><Value1Name>TELJES</Value1Name><Value2Name>FELSO</Value2Name><Value3Name>FELSO-KOZEP</Value3Name><Value4Name>KOZEP</Value4Name><Value5Name>ALSO-KOZEP</Value5Name><Value6Name>ALSO</Value6Name><Value7Name>7</Value7Name><Value8Name>8</Value8Name><Value9Name>9</Value9Name>
+            <Value0IconId>134</Value0IconId><Value1IconId>140</Value1IconId><Value2IconId>132</Value2IconId><Value3IconId>133</Value3IconId><Value4IconId>134</Value4IconId><Value5IconId>136</Value5IconId><Value6IconId>140</Value6IconId><Value7IconId>12</Value7IconId><Value8IconId>13</Value8IconId><Value9IconId>14</Value9IconId>
+            <OffStateValue>-1</OffStateValue>
+            <ReadSwitchStateScriptPacketParser>SWITCH(PARSEJSON(acState, "verticalSwing"), "default", 0, "fullswing", 1, "swingupper", 2, "swinguppermiddle", 3, "swingmiddle", 4, "swinglowermiddle", 5, "swinglower", 6, NaN)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR value := SWITCH(Mu, 0, "default", 1, "fullswing", 2, "swingupper", 3, "swinguppermiddle", 4, "swingmiddle", 5, "swinglowermiddle", 6, "swinglower", "");
+VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"verticalSwing\":\"" + value + "\"}");
+IF response.IsSuccess = false
+  ADDERROR(response.StatusCode);
+END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Friss levego</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-9</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "freshAir"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"freshAir\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Alvas</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-10</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState><OnStateIconId>184</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "sleep"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"sleep\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Csendes uzem</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-11</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState><OnStateIconId>183</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "quiet"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"quiet\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Kijelzo feny</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-12</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "light"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"light\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - X-Fan szaritas</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-13</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "xfan"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"xfan\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Ionizator</Name>
+          <Model>PacketParserSwitch</Model>
+          <Id>-14</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser /><ShouldDoPeriodicWrite>False</ShouldDoPeriodicWrite>
+            <NegateState>False</NegateState><OnStateIconId>60</OnStateIconId><OffStateIconId>61</OffStateIconId><OnStateName>${general_on}</OnStateName><OffStateName>${general_off}</OffStateName>
+            <ReadSwitchStateScriptPacketParser>IF(PARSEJSON(acState, "anion"), 1, 0)</ReadSwitchStateScriptPacketParser>
+            <WriteSwitchStateScriptPacketParser>VAR response := SENDHTTPREQUEST("/api/taphome/ac", "POST", "{\"anion\":" + IF(St, "true", "false") + "}"); IF response.IsSuccess = false ADDERROR(response.StatusCode); END</WriteSwitchStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+        <Device>
+          <Name>Gree - Szuro tisztitas szukseges</Name>
+          <Model>PacketParserReedContact</Model>
+          <Id>-15</Id>
+          <DeviceProperties>
+            <ReadScriptPacketParser /><InternalPollInterval>$[PollInterval]</InternalPollInterval><CustomVariables /><ServiceAttributesScriptsPacketParser /><ServiceActionsScriptsPacketParser />
+            <OnStateIconId>57</OnStateIconId><OffStateIconId>39</OffStateIconId><OnStateName>Igen</OnStateName><OffStateName>Nem</OffStateName>
+            <ReadStateScriptPacketParser>IF(PARSEJSON(acState, "cleanFilter"), 1, 0)</ReadStateScriptPacketParser>
+          </DeviceProperties>
+        </Device>
+      </Devices>
+    </Module>
+  </Template>
+</Templates>
